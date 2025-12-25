@@ -1,13 +1,18 @@
 #include "battery.h"
 #include <Arduino.h>
-//#include "board_pins.h"
 
 // reuse your existing constants / pins here
 // (or move them into this file and keep only API in the header)
 
 // Battery measurement pins (XIAO nRF52840 Sense)
-#define PIN_BAT_EN   P0_14   // P0.14, enables divider when LOW
-#define PIN_nCHARGING   P0_17
+#ifndef VBAT_ENABLE
+#define VBAT_ENABLE   P0_14
+#endif
+#define PIN_BAT_EN   VBAT_ENABLE   // P0.14, enables divider when LOW
+#define PIN_nCHARGING   (17)
+#ifndef AR_INTERNAL_2_4
+#define AR_INTERNAL_2_4 AR_INTERNAL2V4
+#endif
 
 // Divider values: 1M (top) and 510k (bottom)
 const int VBAT_R1 = 1000;   // top resistor (to battery +)
@@ -16,7 +21,6 @@ int VBAT_R2 = 485;    // bottom resistor (to GND) (510?)
 // ADC configuration (nRF52 core: AR_DEFAULT = 3.6V, 12-bit)
 const float ADC_REF_V       = 2.4f;
 const int   ADC_RES_BITS    = 12;
-
 
 static unsigned long lastBatSampleMs = 0;
 static bool  lowBattery = false;
@@ -39,7 +43,7 @@ int measureVBatPinRaw()
 void batteryInit()
 {
   pinMode(PIN_BAT_EN, INPUT);
-  analogReference(AR_INTERNAL2V4);
+  analogReference(AR_INTERNAL_2_4);
   analogReadResolution(ADC_RES_BITS);
   raw_prev2 = measureVBatPinRaw();
   raw_prev1 = measureVBatPinRaw();  

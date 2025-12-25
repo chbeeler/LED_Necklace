@@ -166,10 +166,14 @@ void bleUpdate()
             ledMode = MODE_EQ;
             b = bm;
           }
-          if (b < 0) b = 0; if (b > 4095) b = 4095;          
-          if (s < 0) s = 0; if (s > 4095) s = 4095;
-          if (a < 0) a = 0; if (a > 255) a = 255;
-          if (nfRaw < 0) nfRaw = 0; if (nfRaw > 5000) nfRaw = 5000;
+          if (b < 0) b = 0; 
+          if (b > 4095) b = 4095;          
+          if (s < 0) s = 0; 
+          if (s > 4095) s = 4095;
+          if (a < 0) a = 0; 
+          if (a > 255) a = 255;
+          if (nfRaw < 0) nfRaw = 0; 
+          if (nfRaw > 5000) nfRaw = 5000;
           
           brightness   = (uint16_t)b;
           sensitivityF = (float)s * SENSITIVITY_CONV_FACTOR;

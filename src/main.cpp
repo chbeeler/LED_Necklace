@@ -1,6 +1,8 @@
 #include <Arduino.h>
 //#include "board_pins.h"
+#ifdef USE_PDM
 #include <PDM.h>
+#endif
 //#include <NFCT.h>
 #include "battery.h"
 #include "ble_control.h"
@@ -54,6 +56,9 @@ bool lowPowerTest = false;
 
 void check_vbat();
 void check_ble();
+#ifdef USE_PDM
+void onPDMdata();
+#endif
 
 /*Adafruit_FlashTransport_QSPI flashTransport;
 
@@ -152,6 +157,7 @@ void setup() {
   pinMode(LED_CHANNEL, OUTPUT);
   analogWriteResolution(PWM_RES_BITS);
 
+#ifdef USE_PDM
   // Configure the data receive callback
   PDM.onReceive(onPDMdata);
 
@@ -162,6 +168,7 @@ void setup() {
     Serial.println("Failed to start PDM!");
     while (1);
   }
+#endif
 
   //NRF_POWER->DCDCEN = 1;  //5.4mA-5.04mA
   //NRF_POWER->DCDCEN = 0;    //8.4mA
@@ -177,13 +184,13 @@ void setup() {
 
   //NFC.begin();
   //NFC.setURI("https://www.viega.ch");
-  NFC.setTXTmessage("Hello World!", "en");
+  //NFC.setTXTmessage("Hello World!", "en");
   // start the NFC module
-  NFC.start();
+  //NFC.start();
 
   Serial.println("PDM audio - started");
 
-  if(chargeCurrentSelection == charge_current_100)
+  /*if(chargeCurrentSelection == charge_current_100)
   {
     digitalWrite(P0_13, LOW);
     pinMode (P0_13, OUTPUT);
@@ -191,7 +198,7 @@ void setup() {
   else
   {
     pinMode (P0_13, INPUT);
-  }
+  }*/
 
   //pinMode(PIN_BAT_EN, INPUT);
 
@@ -215,7 +222,7 @@ void loop()
     char c = Serial.read();
     if(c == 'o')
       lowPowerTest = true;
-    else if(c == 'A')
+    /*else if(c == 'A')
     {
       pinMode(P1_8, OUTPUT);
       digitalWrite(P1_8, HIGH);   //15.7mA
@@ -229,7 +236,7 @@ void loop()
     {
       pinMode(P1_8, INPUT);
       digitalWrite(P1_8, LOW);
-    }
+    }*/
 
   }
   /*if (Serial.available() > 3) 
@@ -257,7 +264,9 @@ void loop()
         digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
 
         // Stop microphone / PDM to reduce current
+        #ifdef USE_PDM
         PDM.end();
+        #endif
 
         BLE.stopAdvertise();
         BLE.disconnect();
@@ -302,13 +311,15 @@ void loop()
  * NOTE: This callback is executed as part of an ISR.
  * Therefore using `Serial` to print messages inside this function isn't supported.
  */
+#ifdef USE_PDM
 void onPDMdata() {
   // Query the number of available bytes
   int bytesAvailable = PDM.available();
-
+  
   // Read into the sample buffer
   PDM.read(sampleBuffer, bytesAvailable);
-
+  
   // 16-bit, 2 bytes per sample
   samplesRead = bytesAvailable / 2;
 }
+#endif
