@@ -1,5 +1,6 @@
 #include <Arduino.h>
 //#include "board_pins.h"
+#define USE_PDM
 #ifdef USE_PDM
 #include <PDM.h>
 #endif
@@ -7,7 +8,7 @@
 #include "battery.h"
 #include "ble_control.h"
 
-//#include <Adafruit_SPIFlash.h>
+#include <Adafruit_SPIFlash.h>
 //#include <nrf52840.h>
 
 #define SERIAL_OUTPUT
@@ -170,7 +171,7 @@ void setup() {
   }
 #endif
 
-  //NRF_POWER->DCDCEN = 1;  //5.4mA-5.04mA
+  NRF_POWER->DCDCEN = 1;  //5.4mA-5.04mA
   //NRF_POWER->DCDCEN = 0;    //8.4mA
 
   /*pinMode(7, INPUT_PULLDOWN);

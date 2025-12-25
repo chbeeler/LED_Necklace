@@ -10,9 +10,6 @@
 #endif
 #define PIN_BAT_EN   VBAT_ENABLE   // P0.14, enables divider when LOW
 #define PIN_nCHARGING   (17)
-#ifndef AR_INTERNAL_2_4
-#define AR_INTERNAL_2_4 AR_INTERNAL2V4
-#endif
 
 // Divider values: 1M (top) and 510k (bottom)
 const int VBAT_R1 = 1000;   // top resistor (to battery +)

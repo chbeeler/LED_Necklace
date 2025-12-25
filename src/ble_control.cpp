@@ -1,233 +1,329 @@
-//#ifdef USE_BLE
 #include "ble_control.h"
+#include <Arduino.h>
 
-BLEService ledService("19B20050-E8F2-537E-4F6C-D104768A1214"); // Bluetooth® Low Energy LED Service
+// ===================== UUIDs =====================
+// Keep same UUID strings as your ArduinoBLE version
+static BLEService ledService("18C30050-E8F2-537E-4F6C-D104768A1214");
 
-// Bluetooth® Low Energy LED Switch Characteristic - custom 128-bit UUID, read and writable by central
-BLEUnsignedIntCharacteristic  brightnessCharacteristic("19B20041-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
-BLEUnsignedIntCharacteristic  sensitivityCharacteristic("19B20042-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
+static BLECharacteristic brightnessCharacteristic("18C30041-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic sensitivityCharacteristic("18C30042-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic vBatCharacteristic("18C30052-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic debugCharacteristic("18C30053-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic vBatThresCharacteristic("18C30054-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic filterCharacteristic("18C30100-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic settingsStrCharacteristic("18C30110-E8F2-537E-4F6C-D104768A1214");
 
-BLEUnsignedShortCharacteristic vBatCharacteristic("19B20052-E8F2-537E-4F6C-D104768A1214", BLERead);
-
-BLEByteCharacteristic debugCharacteristic("19B20053-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
-
-BLEUnsignedIntCharacteristic  vBatThresCharacteristic("19B20054-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
-
-BLEUnsignedIntCharacteristic  filterCharacteristic("19B20100-E8F2-537E-4F6C-D104768A1214", BLERead | BLEWrite);
-
-BLEStringCharacteristic settingsStrCharacteristic(
-  "19B20110-E8F2-537E-4F6C-D104768A1214",
-  BLERead | BLEWrite,
-  64
-);
-
-
-// --- Add these descriptors (UUID 0x2901 = Characteristic User Description)
-BLEDescriptor descBrightness("2901", "Brightness (0..255)");
-BLEDescriptor descSensitivity("2901", "Sensitivity (0..255)");
-BLEDescriptor descVBat("2901", "Battery voltage (mV)");
-BLEDescriptor descMode("2901", "Mode (0=Off,1=EQ,2=Solid,3=Pulse)");
-BLEDescriptor descVBatThres("2901", "VBat threshold (V*10)");
-BLEDescriptor descFilter("2901", "Filter amount (0..255)");
-BLEDescriptor descSettingsStr("2901", "Settings (b, s, a)");
-
-
-//#endif
-
+// ===================== Your config/state =====================
 #define SENSITIVITY_CONV_FACTOR   (0.0005f)
 
-static BLEDevice central;
 static uint16_t brightness = 100;
-static float sensitivityF = 0.5f;
-static uint8_t ledMode = 1;
-static float filter_alpha = 0.15f;
-static float noise_floor = 10.0f;   // same unit you use in DSP (avg abs, etc.)
-uint16_t vbat_mV=0;
+static float    sensitivityF = 0.5f;
+static uint8_t  ledMode = 1;
+static float    filter_alpha = 0.15f;
+static float    noise_floor  = 10.0f;
+static float    vbatThres    = 3.8f;
+static uint16_t vbat_mV      = 0;
 
 static const uint8_t MODE_EQ       = 1;
 static const uint8_t MODE_CONSTANT = 2;
 
-static float vbatThres = 3.8f;
+// ===== flags / buffers filled by BLE callbacks =====
+static volatile bool g_brightness_written = false;
+static volatile bool g_sensitivity_written = false;
+static volatile bool g_filter_written = false;
+static volatile bool g_vbatThres_written = false;
+static volatile bool g_mode_written = false;
+static volatile bool g_settings_written = false;
+
+static volatile uint32_t g_brightness_u32 = 0;
+static volatile uint32_t g_sensitivity_u32 = 0;
+static volatile uint32_t g_filter_u32 = 0;
+static volatile uint32_t g_vbatThres_u32 = 0;
+static volatile uint8_t  g_mode_u8 = 0;
+
+static char g_settings_buf[65]; // 64 + NUL
+
+// ===================== helpers =====================
+static uint32_t rd_u32_le(const uint8_t* d, uint16_t len)
+{
+  if (len < 4) return 0;
+  return (uint32_t)d[0] |
+         ((uint32_t)d[1] << 8) |
+         ((uint32_t)d[2] << 16) |
+         ((uint32_t)d[3] << 24);
+}
 
 static void writeSettingsString()
 {
-  char s[64];
-
   // bm encodes mode in sign
   int bm = (int)brightness;
   if (ledMode == MODE_CONSTANT) bm = -bm;
 
-  int sensitivityRaw = (int)(sensitivityF / SENSITIVITY_CONV_FACTOR + 0.5f);
-  int alphaRaw       = (int)(filter_alpha * 500.0f + 0.5f);
-  int noiseFloorRaw          = (int)(noise_floor + 0.5f);
+  int sensitivityRaw  = (int)(sensitivityF / SENSITIVITY_CONV_FACTOR + 0.5f);
+  int alphaRaw        = (int)(filter_alpha * 500.0f + 0.5f);
+  int noiseFloorRaw   = (int)(noise_floor + 0.5f);
 
-  // clamp to your intended ranges
-  if (bm > 4095) bm = 4095; 
+  // clamp ranges
+  if (bm > 4095) bm = 4095;
   if (bm < -4095) bm = -4095;
   if (sensitivityRaw < 0) sensitivityRaw = 0;
   if (sensitivityRaw > 4095) sensitivityRaw = 4095;
   if (alphaRaw < 0) alphaRaw = 0;
   if (alphaRaw > 255) alphaRaw = 255;
   if (noiseFloorRaw < 0) noiseFloorRaw = 0;
-  if (noiseFloorRaw > 255) noiseFloorRaw = 255; 
+  if (noiseFloorRaw > 255) noiseFloorRaw = 255;
 
+  char s[64];
   snprintf(s, sizeof(s), "%d,%d,%d,%d,%d", bm, sensitivityRaw, alphaRaw, noiseFloorRaw, vbat_mV);
-  settingsStrCharacteristic.writeValue(s);
+
+  //Serial.println(s);
+
+  // write string characteristic (variable length)
+  settingsStrCharacteristic.write((const uint8_t*)s, (uint16_t)strlen(s));
 }
 
+// ===================== callbacks =====================
+static void cb_brightness(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_brightness_u32 = rd_u32_le(data, len);
+  g_brightness_written = true;
+}
+static void cb_sensitivity(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_sensitivity_u32 = rd_u32_le(data, len);
+  g_sensitivity_written = true;
+}
+static void cb_filter(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_filter_u32 = rd_u32_le(data, len);
+  g_filter_written = true;
+}
+static void cb_vbatThres(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_vbatThres_u32 = rd_u32_le(data, len);
+  g_vbatThres_written = true;
+}
+static void cb_mode(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  if (len >= 1) {
+    g_mode_u8 = data[0];
+    g_mode_written = true;
+  }
+}
+static void cb_settings(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  if (len > 64) len = 64;
+  memcpy((void*)g_settings_buf, data, len);
+  g_settings_buf[len] = '\0';
+  Serial.println(g_settings_buf);
+  g_settings_written = true;
+}
+
+static void disconnectBle() {
+  uint16_t connections = Bluefruit.connected();
+  for (uint16_t conn = 0; conn < connections; conn++) {
+    Bluefruit.disconnect(conn);
+  }
+}
+
+void ble_sleep(void) {
+  Bluefruit.Advertising.restartOnDisconnect(false);
+  disconnectBle();
+  Bluefruit.Advertising.stop();
+}
+
+// ===================== public API =====================
 void bleInit(uint16_t initialBrightness)
 {
   brightness = initialBrightness;
 
-  if (!BLE.begin()) return;
+  Bluefruit.begin();
 
-  BLE.setLocalName("LED Necklace");
-  BLE.setAdvertisedService(ledService);
+  Bluefruit.autoConnLed(false);   // disable the blinking connection LED
+  Bluefruit.setConnLedInterval(0);  // optional: no LED updates
 
-  ledService.addCharacteristic(settingsStrCharacteristic);
-  ledService.addCharacteristic(vBatCharacteristic);
-  ledService.addCharacteristic(brightnessCharacteristic);
-  ledService.addCharacteristic(sensitivityCharacteristic);
-  ledService.addCharacteristic(debugCharacteristic);  
-  ledService.addCharacteristic(vBatThresCharacteristic);
-  ledService.addCharacteristic(filterCharacteristic);
-  
+  Bluefruit.setName("LED Necklace BlueF");
 
-  brightnessCharacteristic.addDescriptor(descBrightness);
-  sensitivityCharacteristic.addDescriptor(descSensitivity);
-  vBatCharacteristic.addDescriptor(descVBat);
-  debugCharacteristic.addDescriptor(descMode);
-  vBatThresCharacteristic.addDescriptor(descVBatThres);
-  filterCharacteristic.addDescriptor(descFilter);
-  settingsStrCharacteristic.addDescriptor(descSettingsStr);
+  // Optional (nice for iOS): faster re-adv on disconnect
+  Bluefruit.Periph.setConnectCallback(nullptr);
+  Bluefruit.Periph.setDisconnectCallback(nullptr);
 
-  BLE.addService(ledService);
+  // --- Service ---
+  ledService.begin();
 
-  brightnessCharacteristic.writeValue(brightness);
-  sensitivityCharacteristic.writeValue((uint16_t)(sensitivityF / SENSITIVITY_CONV_FACTOR + 0.5f));
-  filterCharacteristic.writeValue((uint16_t)(filter_alpha * 500.0f + 0.5f));
+  // --- Characteristics ---
+  // brightness (uint32), read/write
+  brightnessCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  brightnessCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  brightnessCharacteristic.setFixedLen(4);
+  brightnessCharacteristic.setWriteCallback(cb_brightness);
+  brightnessCharacteristic.setUserDescriptor("Brightness (0..4095)");
+  brightnessCharacteristic.begin();
 
-  // --- NEW: write initial settings string ---
+  // sensitivity (uint32), read/write
+  sensitivityCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  sensitivityCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  sensitivityCharacteristic.setFixedLen(4);
+  sensitivityCharacteristic.setWriteCallback(cb_sensitivity);
+  sensitivityCharacteristic.setUserDescriptor("Sensitivity raw (0..4095)");
+  sensitivityCharacteristic.begin();
+
+  // vBat (uint16), read
+  vBatCharacteristic.setProperties(CHR_PROPS_READ);
+  vBatCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  vBatCharacteristic.setFixedLen(2);
+  vBatCharacteristic.setUserDescriptor("Battery voltage (mV)");
+  vBatCharacteristic.begin();
+
+  // mode (uint8), read/write
+  debugCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  debugCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  debugCharacteristic.setFixedLen(1);
+  debugCharacteristic.setWriteCallback(cb_mode);
+  debugCharacteristic.setUserDescriptor("Mode (0=Off,1=EQ,2=Constant)");
+  debugCharacteristic.begin();
+
+  // vBatThres (uint32), read/write (V*10)
+  vBatThresCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  vBatThresCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  vBatThresCharacteristic.setFixedLen(4);
+  vBatThresCharacteristic.setWriteCallback(cb_vbatThres);
+  vBatThresCharacteristic.setUserDescriptor("VBat threshold (V*10)");
+  vBatThresCharacteristic.begin();
+
+  // filter (uint32), read/write (0..255)
+  filterCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  filterCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  filterCharacteristic.setFixedLen(4);
+  filterCharacteristic.setWriteCallback(cb_filter);
+  filterCharacteristic.setUserDescriptor("Filter amount (0..255)");
+  filterCharacteristic.begin();
+
+  // settings string (variable length <= 64)
+  settingsStrCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  settingsStrCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  settingsStrCharacteristic.setMaxLen(64);
+  settingsStrCharacteristic.setWriteCallback(cb_settings);
+  settingsStrCharacteristic.setUserDescriptor("Settings: bm,s,a,nf,vbat");
+  settingsStrCharacteristic.begin();
+
+  // --- Initial values ---
+  // NOTE: All u32 values are little-endian when written by apps/web
+  brightnessCharacteristic.write32(brightness);
+  sensitivityCharacteristic.write32((uint32_t)(sensitivityF / SENSITIVITY_CONV_FACTOR + 0.5f));
+  filterCharacteristic.write32((uint32_t)(filter_alpha * 500.0f + 0.5f));
+  debugCharacteristic.write8(ledMode);
+  vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
+  vBatCharacteristic.write16(vbat_mV);
+
   writeSettingsString();
 
-  BLE.advertise();
+  // --- Advertising ---
+  Bluefruit.Advertising.stop();
+  Bluefruit.Advertising.clearData();
+  Bluefruit.ScanResponse.clearData();
+
+  Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+  Bluefruit.Advertising.addTxPower();
+  Bluefruit.Advertising.addService(ledService);
+  Bluefruit.ScanResponse.addName();
+
+  Bluefruit.Advertising.restartOnDisconnect(true);
+  Bluefruit.Advertising.setInterval(32, 244); // 20ms..152.5ms
+  Bluefruit.Advertising.setFastTimeout(5);
+  Bluefruit.Advertising.start(0); // 0 = forever
 }
-
-
+extern bool lowPowerTest;
 void bleUpdate()
 {
-  if (!central) {
-    central = BLE.central();
-  } else {
-    if (central.connected()) {
+  // Apply pending writes latched by callbacks
+  if (g_brightness_written) {
+    g_brightness_written = false;
+    uint32_t v = g_brightness_u32;
+    if (v > 4095) v = 4095;
+    brightness = (uint16_t)v;
+    brightnessCharacteristic.write32(brightness);
+    writeSettingsString();
+  }
 
-      if (brightnessCharacteristic.written()) {
-        uint32_t v = brightnessCharacteristic.value();
-        if (v > 4095) v = 4095;
-        brightness = (uint16_t)v;
-        writeSettingsString();
-      }
+  if (g_sensitivity_written) {
+    g_sensitivity_written = false;
+    uint32_t raw = g_sensitivity_u32;
+    if (raw > 4095) raw = 4095;
+    sensitivityF = (float)raw * SENSITIVITY_CONV_FACTOR;
+    sensitivityCharacteristic.write32(raw);
+    writeSettingsString();
+  }
 
-      if (sensitivityCharacteristic.written()) {
-        uint32_t raw = sensitivityCharacteristic.value();
-        if (raw > 255) raw = 255;
-        sensitivityF = (float)raw * SENSITIVITY_CONV_FACTOR;
-        writeSettingsString();
-      }
+  if (g_filter_written) {
+    g_filter_written = false;
+    uint32_t raw = g_filter_u32;
+    if (raw > 255) raw = 255;
+    filter_alpha = (float)raw / 500.0f;
+    filterCharacteristic.write32(raw);
+    writeSettingsString();
+  }
 
-      if (filterCharacteristic.written()) {
-        uint32_t raw = filterCharacteristic.value();
-        if (raw > 255) raw = 255;
-        filter_alpha = (float)raw / 500.0f;   // 0..0.255
-        writeSettingsString();
-      }
+  if (g_vbatThres_written) {
+    g_vbatThres_written = false;
+    vbatThres = (float)g_vbatThres_u32 / 10.0f;
+    vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
+  }
 
-      if (vBatThresCharacteristic.written()) {
-        vbatThres = (float)vBatThresCharacteristic.value() / 10.0f;
-      }
+  if (g_mode_written) {
+    g_mode_written = false;
+    ledMode = g_mode_u8;
+    debugCharacteristic.write8(ledMode);
+    if(ledMode == 2)
+      lowPowerTest = true;
+    writeSettingsString();
+  }
 
-      if (debugCharacteristic.written()) {
-        ledMode = debugCharacteristic.value();
-      }
+  if (g_settings_written) {
+    g_settings_written = false;
 
-      // --- NEW: parse comma-separated settings string: "b,s,a" ---
-      if (settingsStrCharacteristic.written()) {
-        int bm = 0, b = 0, s = 0, a = 0, nfRaw = 0;
+    // Expect "bm,s,a,nf" (your existing format)
+    int bm = 0, b = 0, s = 0, a = 0, nfRaw = 0;
+    int matched = sscanf(g_settings_buf, " %d , %d , %d , %d ", &bm, &s, &a, &nfRaw);
+    if (matched == 4) {
+      if (bm < 0) { ledMode = MODE_CONSTANT; b = -bm; }
+      else        { ledMode = MODE_EQ;       b = bm;  }
 
-        String str = settingsStrCharacteristic.value();
-        int matched = sscanf(str.c_str(), " %d , %d , %d , %d ", &bm, &s, &a, &nfRaw);
+      if (b < 0) b = 0; 
+      if (b > 4095) b = 4095;
+      if (s < 0) s = 0; 
+      if (s > 4095) s = 4095;
+      if (a < 0) a = 0; 
+      if (a > 255)  a = 255;
+      if (nfRaw < 0) nfRaw = 0; 
+      if (nfRaw > 255) nfRaw = 255;
 
-        if (matched == 4) {
-          // mode from sign of bm
-          if (bm < 0) {
-            ledMode = MODE_CONSTANT;
-            b = -bm;
-          } else {
-            ledMode = MODE_EQ;
-            b = bm;
-          }
-          if (b < 0) b = 0; 
-          if (b > 4095) b = 4095;          
-          if (s < 0) s = 0; 
-          if (s > 4095) s = 4095;
-          if (a < 0) a = 0; 
-          if (a > 255) a = 255;
-          if (nfRaw < 0) nfRaw = 0; 
-          if (nfRaw > 5000) nfRaw = 5000;
-          
-          brightness   = (uint16_t)b;
-          sensitivityF = (float)s * SENSITIVITY_CONV_FACTOR;
-          filter_alpha = (float)a / 500.0f;
-          noise_floor = (float)nfRaw;
+      brightness   = (uint16_t)b;
+      sensitivityF = (float)s * SENSITIVITY_CONV_FACTOR;
+      filter_alpha = (float)a / 500.0f;
+      noise_floor  = (float)nfRaw;
 
-          // keep individual characteristics in sync
-          brightnessCharacteristic.writeValue((uint32_t)brightness);
-          sensitivityCharacteristic.writeValue((uint32_t)s);
-          filterCharacteristic.writeValue((uint32_t)a);
-          debugCharacteristic.writeValue(ledMode);
+      // sync other characteristics
+      brightnessCharacteristic.write32(brightness);
+      sensitivityCharacteristic.write32((uint32_t)s);
+      filterCharacteristic.write32((uint32_t)a);
+      debugCharacteristic.write8(ledMode);
 
-          // rewrite canonical string (normalized formatting)
-          writeSettingsString();
-        }
-      }
-
-    } else {
-      central = BLEDevice();
+      writeSettingsString();
     }
   }
 }
 
-
-uint16_t bleGetBrightness()
-{
-  return brightness;
-}
-
-float bleGetSensitivity()
-{
-  return sensitivityF;
-}
+uint16_t bleGetBrightness()         { return brightness; }
+float    bleGetSensitivity()        { return sensitivityF; }
+float    bleGetVbatThres()          { return vbatThres; }
+uint8_t  getLedMode()               { return ledMode; }
+float    getFilterAlpha()           { return filter_alpha; }
+float    bleGetNoiseFloor()         { return noise_floor; }
 
 void bleSetVBat_mV(uint16_t mv)
 {
-  vBatCharacteristic.writeValue(mv);
   vbat_mV = mv;
-  writeSettingsString();  //TODO: not efficient
+  vBatCharacteristic.write16(mv);
+  writeSettingsString(); // same as your TODO: not efficient, but identical behaviour
 }
-
-float bleGetVbatThres()
-{
-  return vbatThres;
-}
-
-uint8_t getLedMode()
-{
-  return ledMode;
-}
-
-float getFilterAlpha()
-{
-  return filter_alpha;
-}
-
-float bleGetNoiseFloor() { return noise_floor; }
