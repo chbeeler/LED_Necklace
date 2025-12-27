@@ -63,7 +63,7 @@ void check_ble();
 void onPDMdata();
 #endif
 
-/*Adafruit_FlashTransport_QSPI flashTransport;
+Adafruit_FlashTransport_QSPI flashTransport;
 
 enum commands_t
 {
@@ -71,16 +71,13 @@ enum commands_t
     DA_CMD_DO_WORK,
     DA_CMD_SYSTEM_OFF_SLEEP
 };
-static int da_command = DA_CMD_DO_NOTHING;
-static SemaphoreHandle_t da_xSemaphore;
-static int da_work_LED_status = HIGH;
 
 void QSPIF_sleep(void)
 {
   flashTransport.begin();
   flashTransport.runCommand(0xB9);
   flashTransport.end();
-}*/
+}
 
 void updateLEDs()
 {
