@@ -23,7 +23,7 @@ static float    sensitivityF = 0.5f;
 static uint8_t  ledMode = 1;
 static float    filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;
-static float    vbatThres    = 3.8f;
+static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
 
 static const uint8_t MODE_EQ       = 1;
