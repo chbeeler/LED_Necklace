@@ -5,6 +5,7 @@ BLEUart bleuart;   // global
 
 // ===================== UUIDs =====================
 // Keep same UUID strings as your ArduinoBLE version
+#ifdef DEV2
 static BLEService ledService("18C30050-E8F2-537E-4F6C-D104768A1214");
 
 static BLECharacteristic brightnessCharacteristic("18C30041-E8F2-537E-4F6C-D104768A1214");
@@ -14,6 +15,18 @@ static BLECharacteristic debugCharacteristic("18C30053-E8F2-537E-4F6C-D104768A12
 static BLECharacteristic vBatThresCharacteristic("18C30054-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic filterCharacteristic("18C30100-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic settingsStrCharacteristic("18C30110-E8F2-537E-4F6C-D104768A1214");
+
+#else
+static BLEService ledService("18C40050-E8F2-537E-4F6C-D104768A1214");
+
+static BLECharacteristic brightnessCharacteristic("18C40041-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic sensitivityCharacteristic("18C40042-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic vBatCharacteristic("18C40052-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic debugCharacteristic("18C40053-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic vBatThresCharacteristic("18C40054-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic filterCharacteristic("18C40100-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic settingsStrCharacteristic("18C40110-E8F2-537E-4F6C-D104768A1214");
+#endif
 
 // ===================== Your config/state =====================
 #define SENSITIVITY_CONV_FACTOR   (0.0005f)
@@ -144,7 +157,12 @@ void bleInit(uint16_t initialBrightness)
   Bluefruit.autoConnLed(false);   // disable the blinking connection LED
   Bluefruit.setConnLedInterval(0);  // optional: no LED updates
 
-  Bluefruit.setName("LED Necklace BlueF");
+  #ifdef DEV2
+  Bluefruit.setName("LED Necklace 2");
+  #else
+  Bluefruit.setName("LED Necklace 1");
+  #endif
+
   bleuart.begin();
 
   // Optional (nice for iOS): faster re-adv on disconnect
