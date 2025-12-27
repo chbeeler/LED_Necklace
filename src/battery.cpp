@@ -13,10 +13,10 @@
 
 // Divider values: 1M (top) and 510k (bottom)
 const int VBAT_R1 = 1000;   // top resistor (to battery +)
-int VBAT_R2 = 485;    // bottom resistor (to GND) (510?)
+int VBAT_R2 = 490;    // bottom resistor (to GND) (510?)
 
 // ADC configuration (nRF52 core: AR_DEFAULT = 3.6V, 12-bit)
-const float ADC_REF_V       = 2.4f;
+const float ADC_REF_V       = 1.8f;
 const int   ADC_RES_BITS    = 12;
 
 static unsigned long lastBatSampleMs = 0;
@@ -31,16 +31,31 @@ int measureVBatPinRaw()
 {
   pinMode(PIN_BAT_EN, OUTPUT);
   digitalWrite(PIN_BAT_EN, LOW);
-  delay(5);
-  int raw = analogRead(PIN_VBAT);
+  
+  delayMicroseconds(500);        // usually enough
+
+  (void)analogRead(PIN_VBAT);    // discard 1st
+  delayMicroseconds(200);
+
+  // average a few (fast, low jitter)
+  uint32_t sum = 0;
+  const int N = 8;
+  for (int i = 0; i < N; i++) {
+    sum += analogRead(PIN_VBAT);
+    delayMicroseconds(100);
+  }
+
+  //Serial.print(sum / N);
+  //Serial.print(",");
+
   pinMode(PIN_BAT_EN, INPUT);
-  return raw;
+  return (int)(sum / N);
 }
 
 void batteryInit()
 {
   pinMode(PIN_BAT_EN, INPUT);
-  analogReference(AR_INTERNAL_2_4);
+  analogReference(AR_INTERNAL_1_8);
   analogReadResolution(ADC_RES_BITS);
   raw_prev2 = measureVBatPinRaw();
   raw_prev1 = measureVBatPinRaw();  
