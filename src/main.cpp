@@ -126,7 +126,11 @@ void updateLEDs()
     case 2: ledValue = brightness; break;
   }
 
-  analogWrite(LED_CHANNEL, ledValue);
+  unsigned long t = millis();
+  if(t > 500UL){
+    analogWrite(LED_CHANNEL, ledValue);
+  }
+  analogWrite(LED_BUILTIN, pwmMax-ledValue);
   
 #ifdef SERIAL_OUTPUT
   // Plot the filtered loudness (or effectiveLoudness) in Serial Plotter
@@ -156,9 +160,10 @@ void setup() {
     // wait for serial
   }*/
 
-  pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(LED_CHANNEL, OUTPUT);
   analogWriteResolution(PWM_RES_BITS);
+  pinMode(LED_CHANNEL, OUTPUT);
+  analogWrite(LED_CHANNEL, 0);
+  pinMode(LED_BUILTIN, OUTPUT);
 
 #ifdef USE_PDM
   // Configure the data receive callback
