@@ -274,7 +274,7 @@ void bleUpdate()
     g_mode_written = false;
     ledMode = g_mode_u8;
     debugCharacteristic.write8(ledMode);
-    if(ledMode == 2)
+    if(g_mode_u8 == 3)
       lowPowerTest = true;
     writeSettingsString();
   }
