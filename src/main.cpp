@@ -14,6 +14,8 @@
 #define SERIAL_OUTPUT
 #define USE_BLE
 
+extern BLEUart bleuart;   // global
+
 // ---- PWM configuration ----
 const uint8_t PWM_RES_BITS = 12;    // 12-bit: 0..4095 (nRF52840 HW can do up to 15 bits)
 uint16_t pwmMax = (1 << PWM_RES_BITS) - 1;
@@ -251,37 +253,53 @@ void loop()
   }*/
 
   batteryUpdate(bleGetVbatThres());
-  if (batteryIsLow() == true && vbusConnected() == false || lowPowerTest) {
+  if (((batteryIsLow() == true) && (vbusConnected() == false)) || lowPowerTest || getBatteryVoltage() < 3.7f) {
     // Immediately stop LEDs
     analogWrite(LED_CHANNEL, 0);
+    //analogWrite(LED_BUILTIN, pwmMax);
     digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
 
-    if(getBatteryVoltage() < 3.7f || lowPowerTest)    //if battery is very low, completly turn off
+    if(getBatteryVoltage() < 3.73f || lowPowerTest)    //if battery is very low, completly turn off
     {
       if(lowBattery == false)
       {
+        lowBattery = true;
+        delay(10000);
+        bleuart.print("LED Pin input");
         // Immediately stop LEDs
-        analogWrite(LED_CHANNEL, 0); 
-        digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
+        pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
+        
+        delay(10000);
+        bleuart.print("Board LED input");
+        //digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
+        pinMode(LED_BUILTIN, INPUT);   // off
 
+        delay(10000);
+        bleuart.print("PDM end");
         // Stop microphone / PDM to reduce current
         #ifdef USE_PDM
         PDM.end();
         #endif
 
-        BLE.stopAdvertise();
+        /*BLE.stopAdvertise();
         BLE.disconnect();
-        BLE.end();  //2.17mA    /2.62mA (DC=1)
+        BLE.end();  //2.17mA    /2.62mA (DC=1)*/
 
+        /*delay(20000);
+        bleuart.print("QSPIF_sleep");
+        QSPIF_sleep();*/
+        
         delay(20000);
-
-        //QSPIF_sleep();
+        
+        ble_sleep();
 
         delay(20000);
         NRF_POWER->SYSTEMOFF = 1;   // 0.65mA      0.65mA (DC=1)
-        while (1) {};
-      }
-      lowBattery = true;
+
+        pinMode(LED_BUILTIN, OUTPUT);   // off
+        digitalWrite(LED_BUILTIN, LOW);
+        delay(2000);
+      }      
     }
     else    //Otherwise we keep running without LEDs
     {

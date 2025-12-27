@@ -1,6 +1,8 @@
 #include "ble_control.h"
 #include <Arduino.h>
 
+BLEUart bleuart;   // global
+
 // ===================== UUIDs =====================
 // Keep same UUID strings as your ArduinoBLE version
 static BLEService ledService("18C30050-E8F2-537E-4F6C-D104768A1214");
@@ -143,6 +145,7 @@ void bleInit(uint16_t initialBrightness)
   Bluefruit.setConnLedInterval(0);  // optional: no LED updates
 
   Bluefruit.setName("LED Necklace BlueF");
+  bleuart.begin();
 
   // Optional (nice for iOS): faster re-adv on disconnect
   Bluefruit.Periph.setConnectCallback(nullptr);
