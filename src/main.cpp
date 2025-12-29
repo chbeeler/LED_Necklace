@@ -57,20 +57,12 @@ float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune thi
 
 bool lowPowerTest = false;
 
-void check_vbat();
-void check_ble();
 #ifdef USE_PDM
 void onPDMdata();
 #endif
 
 Adafruit_FlashTransport_QSPI flashTransport;
 
-enum commands_t
-{
-    DA_CMD_DO_NOTHING = 0,
-    DA_CMD_DO_WORK,
-    DA_CMD_SYSTEM_OFF_SLEEP
-};
 
 void QSPIF_sleep(void)
 {
