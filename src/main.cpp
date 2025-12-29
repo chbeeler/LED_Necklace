@@ -9,6 +9,7 @@
 #include "ble_control.h"
 
 #include <Adafruit_SPIFlash.h>
+#include <LSM6DS3.h>
 //#include <nrf52840.h>
 
 #define SERIAL_OUTPUT
@@ -62,13 +63,35 @@ void onPDMdata();
 #endif
 
 Adafruit_FlashTransport_QSPI flashTransport;
-
+LSM6DS3 myIMU; // Default is I2C mode
 
 void QSPIF_sleep(void)
 {
   flashTransport.begin();
   flashTransport.runCommand(0xB9);
   flashTransport.end();
+}
+
+void setupWakeUpInterrupt()
+{
+  // Start with LSM6DS3 in disabled to save power
+  myIMU.settings.gyroEnabled = 0;
+  myIMU.settings.accelEnabled = 0;
+  myIMU.begin();
+  //Values that use the highest low power setting (52Hz) with resulting physical tap detection parameters that are
+  //close as possible to the application note values.
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_CTRL1_XL, 0x30);    // Turn on the accelerometer // ODR_XL = 52 Hz, FS_XL = ±2 g                                                           
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_TAP_CFG1, 0x8E);    // Enable interrupts and tap detection on X, Y, Z-axis
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_TAP_THS_6D, 0x8C);  // Set tap threshold
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_INT_DUR2, 0x10);    // Set Duration, Quiet and Shock time windows
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_THS, 0x80); // Single & double-tap enabled (SINGLE_DOUBLE_TAP = 1)
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_CTRL6_G, 0x10);     // High-performance operating mode disabled for accelerometer
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_MD1_CFG, 0x08);     // Double-tap interrupt driven to INT1 pin
+
+  // Set up the sense mechanism to generate the DETECT signal to wake from system_off
+  // No need to attach a handler, if just waking with the GPIO input.
+  pinMode(PIN_LSM6DS3TR_C_INT1, INPUT_PULLDOWN_SENSE);
+  return;
 }
 
 void updateLEDs()
@@ -142,75 +165,123 @@ void shutdownISR()
 {
   Serial.println("ISR");
 }
-
+uint32_t reason = 0;
 void setup() {
-  Serial.begin(115200);
-  /*while (!Serial) {
-    // wait for serial
-  }*/
-
-  analogWriteResolution(PWM_RES_BITS);
-  pinMode(LED_CHANNEL, OUTPUT);
-  analogWrite(LED_CHANNEL, 0);
-  pinMode(LED_BUILTIN, OUTPUT);
-
-#ifdef USE_PDM
-  // Configure the data receive callback
-  PDM.onReceive(onPDMdata);
-
-  // Optionally set the gain
-  //PDM.setGain(25);
-
-  if (!PDM.begin(channels, frequency)) {
-    Serial.println("Failed to start PDM!");
-    while (1);
-  }
-#endif
-
-  NRF_POWER->DCDCEN = 1;  //5.4mA-5.04mA
-  //NRF_POWER->DCDCEN = 0;    //8.4mA
-
-  /*pinMode(7, INPUT_PULLDOWN);
-  pinMode(9, OUTPUT);
-  digitalWrite(9, HIGH);
-  pinMode(10, INPUT_PULLUP);*/
-  //attachInterrupt(digitalPinToInterrupt(7), shutdownISR, RISING);
-
-  pinMode(D2, INPUT_PULLUP);
-  attachInterrupt(digitalPinToInterrupt(D2), shutdownISR, FALLING);
-
-  //NFC.begin();
-  //NFC.setURI("https://www.viega.ch");
-  //NFC.setTXTmessage("Hello World!", "en");
-  // start the NFC module
-  //NFC.start();
-
-  Serial.println("PDM audio - started");
-
-  /*if(chargeCurrentSelection == charge_current_100)
+  reason = NRF_POWER->GPREGRET;
+  NRF_POWER->GPREGRET = 0;
+  if (reason == 0x03) 
   {
-    digitalWrite(P0_13, LOW);
-    pinMode (P0_13, OUTPUT);
+    delay(20000);
+    QSPIF_sleep();
+    delay(20000);
+    NRF_POWER->SYSTEMOFF = 1;
+  } else if(reason == 0x08)
+  {
+    uint16_t b = getStaticBrightness();
+    if(b < 500)
+    {
+      analogWriteResolution(PWM_RES_BITS);
+      pinMode(LED_CHANNEL, OUTPUT);
+      analogWrite(LED_CHANNEL, b);
+    }
+    //QSPIF_sleep();
+    delay(2000);
+    //setupWakeUpInterrupt();
+    //NRF_POWER->SYSTEMOFF=1;
   }
   else
   {
-    pinMode (P0_13, INPUT);
-  }*/
+    Serial.begin(115200);
 
-  //pinMode(PIN_BAT_EN, INPUT);
+    analogWriteResolution(PWM_RES_BITS);
+    pinMode(LED_CHANNEL, OUTPUT);
+    analogWrite(LED_CHANNEL, 0);
+    pinMode(LED_BUILTIN, OUTPUT);
 
-  batteryInit();
-#ifdef USE_BLE
-  bleInit(brightness);     // your existing global brightness
-#endif
+    delay(2000);  //Temp
+
+  #ifdef USE_PDM
+    // Configure the data receive callback
+    PDM.onReceive(onPDMdata);
+
+    // Optionally set the gain
+    //PDM.setGain(25);
+
+    if (!PDM.begin(channels, frequency)) {
+      Serial.println("Failed to start PDM!");
+      while (1);
+    }
+  #endif
+
+    NRF_POWER->DCDCEN = 1;  //save power
+
+    /*pinMode(7, INPUT_PULLDOWN);
+    pinMode(9, OUTPUT);
+    digitalWrite(9, HIGH);
+    pinMode(10, INPUT_PULLUP);*/
+    //attachInterrupt(digitalPinToInterrupt(7), shutdownISR, RISING);
+
+    pinMode(D2, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(D2), shutdownISR, FALLING);
+
+    //NFC.begin();
+    //NFC.setURI("https://www.viega.ch");
+    //NFC.setTXTmessage("Hello World!", "en");
+    // start the NFC module
+    //NFC.start();
+
+    Serial.println("PDM audio - started");
+
+    /*delay(1000);
+    uint32_t reason = 0;
+    sd_power_gpregret_get(0, &reason);
+    //sd_power_gpregret_clr(0, 0xffffffff); //clear
+    Serial.print("RST: ");
+    Serial.println(reason);*/
+
+    /*if(chargeCurrentSelection == charge_current_100)
+    {
+      digitalWrite(P0_13, LOW);
+      pinMode (P0_13, OUTPUT);
+    }
+    else
+    {
+      pinMode (P0_13, INPUT);
+    }*/
+
+    //pinMode(PIN_BAT_EN, INPUT);
+
+    batteryInit();
+  #ifdef USE_BLE
+    bleInit(brightness);     // your existing global brightness
+  #endif
+  }
 }
 
 /*void loop() 
 {
   delay(1);
 }*/
-void loop() 
+void loop()
 {
+  if(reason == 0x08)
+  {
+    uint16_t b = 100;//getStaticBrightness();
+    Serial.println(b);
+    if(b < 500)
+    {
+      analogWriteResolution(PWM_RES_BITS);
+      pinMode(LED_CHANNEL, OUTPUT);
+      analogWrite(LED_CHANNEL, b);
+    }
+    //QSPIF_sleep();
+    delay(1000);
+    reason = 0;
+    setupWakeUpInterrupt();
+    NRF_POWER->SYSTEMOFF=1;   //TODO: replace with sleep
+    return;
+  }
+
   if(digitalRead(7))
     Serial.println("1");
 
@@ -219,6 +290,22 @@ void loop()
     char c = Serial.read();
     if(c == 'o')
       lowPowerTest = true;
+    else if(c == 'r')
+    {
+      /*sd_power_gpregret_set(0,0x00000008);
+
+      uint32_t reason = 0;
+      sd_power_gpregret_get(0, &reason);*/
+
+      NRF_POWER->GPREGRET = 0x0008;
+
+      Serial.print("R read:");
+      uint32_t r = NRF_POWER->GPREGRET;
+      Serial.println(r);
+      Serial.flush();
+      delay(2000);
+      NVIC_SystemReset();
+    }
     /*else if(c == 'A')
     {
       pinMode(P1_8, OUTPUT);
@@ -259,40 +346,13 @@ void loop()
       {
         lowBattery = true;
         delay(10000);
+        Serial.println("UVLO");
         bleuart.print("LED Pin input");
         // Immediately stop LEDs
         pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
         
-        delay(10000);
-        bleuart.print("Board LED input");
-        //digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
-        pinMode(LED_BUILTIN, INPUT);   // off
-
-        delay(10000);
-        bleuart.print("PDM end");
-        // Stop microphone / PDM to reduce current
-        #ifdef USE_PDM
-        PDM.end();
-        #endif
-
-        /*BLE.stopAdvertise();
-        BLE.disconnect();
-        BLE.end();  //2.17mA    /2.62mA (DC=1)*/
-
-        /*delay(20000);
-        bleuart.print("QSPIF_sleep");
-        QSPIF_sleep();*/
-        
-        delay(20000);
-        
-        ble_sleep();
-
-        delay(20000);
-        NRF_POWER->SYSTEMOFF = 1;   // 0.65mA      0.65mA (DC=1)
-
-        pinMode(LED_BUILTIN, OUTPUT);   // off
-        digitalWrite(LED_BUILTIN, LOW);
-        delay(2000);
+        /*sd_power_gpregret_set(0,0x00000003);
+        NVIC_SystemReset();*/
       }      
     }
     else    //Otherwise we keep running without LEDs
@@ -314,6 +374,9 @@ void loop()
       brightness = bleGetBrightness();
       sensitivityF = bleGetSensitivity();
 #endif
+      
+      Serial.print("R2:");
+      Serial.println(reason);
     }
   }
   delay(2);

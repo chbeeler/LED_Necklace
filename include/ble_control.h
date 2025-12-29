@@ -12,3 +12,4 @@ uint8_t getLedMode();
 float getFilterAlpha();
 float bleGetSensitivity();
 float bleGetNoiseFloor();
+uint16_t getStaticBrightness();

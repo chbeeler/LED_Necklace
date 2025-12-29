@@ -58,6 +58,8 @@ static volatile uint8_t  g_mode_u8 = 0;
 
 static char g_settings_buf[65]; // 64 + NUL
 
+__attribute__((section(".noinit"))) volatile uint16_t static_brightness = 0;
+
 // ===================== helpers =====================
 static uint32_t rd_u32_le(const uint8_t* d, uint16_t len)
 {
@@ -307,8 +309,25 @@ void bleUpdate()
     int bm = 0, b = 0, s = 0, a = 0, nfRaw = 0;
     int matched = sscanf(g_settings_buf, " %d , %d , %d , %d ", &bm, &s, &a, &nfRaw);
     if (matched == 4) {
-      if (bm < 0) { ledMode = MODE_CONSTANT; b = -bm; }
-      else        { ledMode = MODE_EQ;       b = bm;  }
+      if (bm < 0) { 
+        ledMode = MODE_CONSTANT; 
+        b = -bm;
+        static_brightness = b;
+        Serial.println("Neg B");
+        NRF_POWER->GPREGRET = 0x0008;
+        //sd_power_gpregret_set(0,0x00000008);
+
+        uint32_t reason = 0;
+        reason = NRF_POWER->GPREGRET;   //sd_power_gpregret_get(0, &reason);
+        Serial.print("R read:");
+        Serial.println(reason);
+
+        delay(2000);
+        NVIC_SystemReset();
+      } else { 
+        ledMode = MODE_EQ;
+        b = bm;
+      }
 
       if (b < 0) b = 0; 
       if (b > 4095) b = 4095;
@@ -347,4 +366,9 @@ void bleSetVBat_mV(uint16_t mv)
   vbat_mV = mv;
   vBatCharacteristic.write16(mv);
   writeSettingsString(); // same as your TODO: not efficient, but identical behaviour
+}
+
+uint16_t getStaticBrightness()
+{
+  return static_brightness;
 }
