@@ -9,6 +9,7 @@
 #include "ble_control.h"
 
 #include <Adafruit_SPIFlash.h>
+#include <LSM6DS3.h>
 //#include <nrf52840.h>
 
 #define SERIAL_OUTPUT
@@ -62,13 +63,35 @@ void onPDMdata();
 #endif
 
 Adafruit_FlashTransport_QSPI flashTransport;
-
+LSM6DS3 myIMU; // Default is I2C mode
 
 void QSPIF_sleep(void)
 {
   flashTransport.begin();
   flashTransport.runCommand(0xB9);
   flashTransport.end();
+}
+
+void setupWakeUpInterrupt()
+{
+  // Start with LSM6DS3 in disabled to save power
+  myIMU.settings.gyroEnabled = 0;
+  myIMU.settings.accelEnabled = 0;
+  myIMU.begin();
+  //Values that use the highest low power setting (52Hz) with resulting physical tap detection parameters that are
+  //close as possible to the application note values.
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_CTRL1_XL, 0x30);    // Turn on the accelerometer // ODR_XL = 52 Hz, FS_XL = ±2 g                                                           
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_TAP_CFG1, 0x8E);    // Enable interrupts and tap detection on X, Y, Z-axis
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_TAP_THS_6D, 0x8C);  // Set tap threshold
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_INT_DUR2, 0x10);    // Set Duration, Quiet and Shock time windows
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_THS, 0x80); // Single & double-tap enabled (SINGLE_DOUBLE_TAP = 1)
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_CTRL6_G, 0x10);     // High-performance operating mode disabled for accelerometer
+  myIMU.writeRegister(LSM6DS3_ACC_GYRO_MD1_CFG, 0x08);     // Double-tap interrupt driven to INT1 pin
+
+  // Set up the sense mechanism to generate the DETECT signal to wake from system_off
+  // No need to attach a handler, if just waking with the GPIO input.
+  pinMode(PIN_LSM6DS3TR_C_INT1, INPUT_PULLDOWN_SENSE);
+  return;
 }
 
 void updateLEDs()
