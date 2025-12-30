@@ -270,13 +270,13 @@ void loop()
   }*/
 
   batteryUpdate(bleGetVbatThres());
-  if (((batteryIsLow() == true) && (vbusConnected() == false)) || lowPowerTest || getBatteryVoltage() < 3.7f) {
+  if (((batteryIsLow() == true) && (vbusConnected() == false)) || lowPowerTest || ((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2))) {
     // Immediately stop LEDs
     analogWrite(LED_CHANNEL, 0);
     //analogWrite(LED_BUILTIN, pwmMax);
     digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
 
-    if(getBatteryVoltage() < 3.73f || lowPowerTest)    //if battery is very low, completly turn off
+    if(((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2)) || lowPowerTest)    //if battery is very low, completly turn off
     {
       if(lowBattery == false)
       {
