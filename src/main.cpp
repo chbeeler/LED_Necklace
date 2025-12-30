@@ -53,7 +53,7 @@ const float NOISE_FLOOR = 10.0f;
 unsigned long lastBatSampleMs = 0;
 bool lowBattery = false;
 
-int brightness = 600;
+int brightness = 100;
 float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune this)
 
 bool lowPowerTest = false;
