@@ -157,11 +157,12 @@ void bleInit(uint16_t initialBrightness)
   Bluefruit.autoConnLed(false);   // disable the blinking connection LED
   Bluefruit.setConnLedInterval(0);  // optional: no LED updates
 
-  #ifdef DEV2
-  Bluefruit.setName("LED Necklace 2");
-  #else
-  Bluefruit.setName("LED Necklace 1");
-  #endif
+  // Use last byte (or last 2 bytes) as a stable differentiator
+  ble_gap_addr_t addr = Bluefruit.getAddr();
+  char name[32];
+  snprintf(name, sizeof(name), "LED Necklace %02X%02X", addr.addr[4], addr.addr[5]);
+
+  Bluefruit.setName(name);
 
   bleuart.begin();
 
