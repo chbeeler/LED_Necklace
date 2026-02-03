@@ -8,9 +8,10 @@ static BLEService ledService("19B10050-E8F2-537E-4F6C-D104768A1214");
 
 static BLECharacteristic brightnessCharacteristic("19B10051-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic sensitivityCharacteristic("19B10052-E8F2-537E-4F6C-D104768A1214");
-static BLECharacteristic vBatCharacteristic("19B10055-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic debugCharacteristic("19B10053-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic vBatThresCharacteristic("19B10054-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic vBatCharacteristic("19B10055-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic noiseFloorCharacteristic("19B10056-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic filterCharacteristic("19B10100-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic settingsStrCharacteristic("19B10110-E8F2-537E-4F6C-D104768A1214");
 
@@ -31,6 +32,7 @@ static const uint8_t MODE_CONSTANT = 2;
 // ===== flags / buffers filled by BLE callbacks =====
 static volatile bool g_brightness_written = false;
 static volatile bool g_sensitivity_written = false;
+static volatile bool g_noise_floor_written = false;
 static volatile bool g_filter_written = false;
 static volatile bool g_vbatThres_written = false;
 static volatile bool g_mode_written = false;
@@ -38,6 +40,7 @@ static volatile bool g_settings_written = false;
 
 static volatile uint32_t g_brightness_u32 = 0;
 static volatile uint32_t g_sensitivity_u32 = 0;
+static volatile uint32_t g_noise_floor_u32 = 0;
 static volatile uint32_t g_filter_u32 = 0;
 static volatile uint32_t g_vbatThres_u32 = 0;
 static volatile uint8_t  g_mode_u8 = 0;
@@ -111,6 +114,11 @@ static void cb_mode(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* 
     g_mode_written = true;
   }
 }
+static void cb_noise_floor(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_noise_floor_u32 = rd_u32_le(data, len);
+  g_noise_floor_written = true;
+}
 static void cb_settings(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
 {
   if (len > 64) len = 64;
@@ -176,6 +184,14 @@ void bleInit(uint16_t initialBrightness)
   sensitivityCharacteristic.setUserDescriptor("Sensitivity raw (0..4095)");
   sensitivityCharacteristic.begin();
 
+  // noiseFloor (uint32), read/write
+  noiseFloorCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  noiseFloorCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  noiseFloorCharacteristic.setFixedLen(4);
+  noiseFloorCharacteristic.setWriteCallback(cb_noise_floor);
+  noiseFloorCharacteristic.setUserDescriptor("Noise Floor raw (0..1000)");
+  noiseFloorCharacteristic.begin();
+
   // vBat (uint16), read
   vBatCharacteristic.setProperties(CHR_PROPS_READ);
   vBatCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
@@ -219,6 +235,7 @@ void bleInit(uint16_t initialBrightness)
   // NOTE: All u32 values are little-endian when written by apps/web
   brightnessCharacteristic.write32(brightness);
   sensitivityCharacteristic.write32((uint32_t)(sensitivityF / SENSITIVITY_CONV_FACTOR + 0.5f));
+  noiseFloorCharacteristic.write32((uint32_t)noise_floor);
   filterCharacteristic.write32((uint32_t)(filter_alpha * 500.0f + 0.5f));
   debugCharacteristic.write8(ledMode);
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
@@ -260,6 +277,15 @@ void bleUpdate()
     if (raw > 4095) raw = 4095;
     sensitivityF = (float)raw * SENSITIVITY_CONV_FACTOR;
     sensitivityCharacteristic.write32(raw);
+    writeSettingsString();
+  }
+
+  if (g_noise_floor_written) {
+    g_noise_floor_written = false;
+    uint32_t raw = g_noise_floor_u32;
+    if (raw > 1000) raw = 1000;
+    noise_floor = (float)raw;
+    noiseFloorCharacteristic.write32(raw);
     writeSettingsString();
   }
 

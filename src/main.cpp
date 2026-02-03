@@ -46,10 +46,6 @@ float filteredLoudness = 0.0f;
 // How fast the filter reacts (0..1, closer to 0 = slower, more smoothing)
 const float LP_ALPHA = 0.15f;
 
-// Optional: simple noise floor to ignore very quiet sounds
-const float NOISE_FLOOR = 10.0f;
-
-
 unsigned long lastBatSampleMs = 0;
 bool lowBattery = false;
 
@@ -116,7 +112,7 @@ void updateLEDs()
   filteredLoudness = filteredLoudness + getFilterAlpha() * (avgLoudness - filteredLoudness);
 
   // ---- Apply noise floor ----
-  float effectiveLoudness = filteredLoudness - NOISE_FLOOR;
+  float effectiveLoudness = filteredLoudness - bleGetNoiseFloor();
   if (effectiveLoudness < 0.0f) {
     effectiveLoudness = 0.0f;
   }
