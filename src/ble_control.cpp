@@ -14,6 +14,7 @@ static BLECharacteristic vBatCharacteristic("19B10055-E8F2-537E-4F6C-D104768A121
 static BLECharacteristic noiseFloorCharacteristic("19B10056-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic filterCharacteristic("19B10100-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic settingsStrCharacteristic("19B10110-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic volMinMaxCharacteristic("19B10120-E8F2-537E-4F6C-D104768A1214");
 
 // ===================== Your config/state =====================
 #define SENSITIVITY_CONV_FACTOR   (0.0005f)
@@ -25,6 +26,8 @@ static float    filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;
 static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
+static uint16_t vol_min      = 0;
+static uint16_t vol_max      = 0;
 
 static const uint8_t MODE_EQ       = 1;
 static const uint8_t MODE_CONSTANT = 2;
@@ -231,6 +234,13 @@ void bleInit(uint16_t initialBrightness)
   settingsStrCharacteristic.setUserDescriptor("Settings: bm,s,a,nf,vbat");
   settingsStrCharacteristic.begin();
 
+  // volume min/max (uint16 min, uint16 max), read-only
+  volMinMaxCharacteristic.setProperties(CHR_PROPS_READ);
+  volMinMaxCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  volMinMaxCharacteristic.setFixedLen(4);
+  volMinMaxCharacteristic.setUserDescriptor("Audio volume range (min,max)");
+  volMinMaxCharacteristic.begin();
+
   // --- Initial values ---
   // NOTE: All u32 values are little-endian when written by apps/web
   brightnessCharacteristic.write32(brightness);
@@ -240,6 +250,7 @@ void bleInit(uint16_t initialBrightness)
   debugCharacteristic.write8(ledMode);
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   vBatCharacteristic.write16(vbat_mV);
+  bleSetVolMinMax(vol_min, vol_max);
 
   writeSettingsString();
 
@@ -360,4 +371,17 @@ void bleSetVBat_mV(uint16_t mv)
   vbat_mV = mv;
   vBatCharacteristic.write16(mv);
   writeSettingsString(); // same as your TODO: not efficient, but identical behaviour
+}
+
+void bleSetVolMinMax(uint16_t min_val, uint16_t max_val)
+{
+  vol_min = min_val;
+  vol_max = max_val;
+
+  uint8_t payload[4];
+  payload[0] = (uint8_t)(vol_min & 0xFF);
+  payload[1] = (uint8_t)((vol_min >> 8) & 0xFF);
+  payload[2] = (uint8_t)(vol_max & 0xFF);
+  payload[3] = (uint8_t)((vol_max >> 8) & 0xFF);
+  volMinMaxCharacteristic.write(payload, sizeof(payload));
 }

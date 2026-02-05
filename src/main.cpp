@@ -46,6 +46,12 @@ float filteredLoudness = 0.0f;
 // How fast the filter reacts (0..1, closer to 0 = slower, more smoothing)
 const float LP_ALPHA = 0.15f;
 
+// ---- Volume min/max tracking over a 5s window ----
+static const uint32_t VOL_RANGE_WINDOW_MS = 5000;
+static uint16_t vol_window_min = 0xFFFF;
+static uint16_t vol_window_max = 0;
+static uint32_t vol_window_start_ms = 0;
+
 unsigned long lastBatSampleMs = 0;
 bool lowBattery = false;
 
@@ -110,6 +116,33 @@ void updateLEDs()
   // ---- Low-pass filter over time (simple 1st-order IIR) ----
   // filtered = filtered + alpha * (input - filtered)
   filteredLoudness = filteredLoudness + getFilterAlpha() * (avgLoudness - filteredLoudness);
+
+  // ---- Track min/max over a fixed 5s window ----
+  uint16_t loud_u16 = 0;
+  if (filteredLoudness <= 0.0f) {
+    loud_u16 = 0;
+  } else if (filteredLoudness >= 65535.0f) {
+    loud_u16 = 65535;
+  } else {
+    loud_u16 = (uint16_t)(filteredLoudness + 0.5f);
+  }
+
+  uint32_t now_ms = millis();
+  if (vol_window_start_ms == 0) {
+    vol_window_start_ms = now_ms;
+  }
+  if (loud_u16 < vol_window_min) vol_window_min = loud_u16;
+  if (loud_u16 > vol_window_max) vol_window_max = loud_u16;
+
+  if ((uint32_t)(now_ms - vol_window_start_ms) >= VOL_RANGE_WINDOW_MS) {
+    if (vol_window_min == 0xFFFF) vol_window_min = 0;
+    bleSetVolMinMax(vol_window_min, vol_window_max);
+
+    // Restart window
+    vol_window_start_ms = now_ms;
+    vol_window_min = 0xFFFF;
+    vol_window_max = 0;
+  }
 
   // ---- Apply noise floor ----
   float effectiveLoudness = filteredLoudness - bleGetNoiseFloor();
