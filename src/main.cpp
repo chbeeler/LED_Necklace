@@ -171,7 +171,7 @@ void updateLEDs()
   if(t > 500UL){
     analogWrite(LED_CHANNEL, ledValue);
   }
-  analogWrite(LED_BUILTIN, pwmMax-ledValue);
+  //analogWrite(LED_BUILTIN, pwmMax-ledValue);
   
 #ifdef SERIAL_OUTPUT
   // Plot the filtered loudness (or effectiveLoudness) in Serial Plotter
