@@ -14,6 +14,7 @@
 
 #define SERIAL_OUTPUT
 #define USE_BLE
+#define USE_RESET_TO_POWER_OFF
 
 extern BLEUart bleuart;   // global
 
@@ -196,6 +197,24 @@ void shutdownISR()
 }
 
 void setup() {
+  
+  batteryInit();
+  
+  //Check battery voltage and power off if low
+  int cnt = 0;
+  do {
+    batteryUpdate(bleGetVbatThres());
+    cnt++;
+    delay(300);
+  }while((vbusConnected() == false) && (getBatteryVoltage() < 3.77f) && (cnt < 5));
+  if(cnt >= 5)
+  {
+    pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
+    pinMode(LED_BUILTIN, INPUT);   // off
+    delay(20000);
+    NRF_POWER->SYSTEMOFF = 1;
+  }
+  
   Serial.begin(115200);
   /*while (!Serial) {
     // wait for serial
@@ -251,7 +270,6 @@ void setup() {
 
   //pinMode(PIN_BAT_EN, INPUT);
 
-  batteryInit();
 #ifdef USE_BLE
   bleInit(brightness);     // your existing global brightness
 #endif
@@ -340,11 +358,15 @@ void loop()
         ble_sleep();
 
         delay(20000);
+        #ifdef USE_RESET_TO_POWER_OFF
+        NVIC_SystemReset();
+        #else
         NRF_POWER->SYSTEMOFF = 1;   // 0.65mA      0.65mA (DC=1)
 
         pinMode(LED_BUILTIN, OUTPUT);   // off
         digitalWrite(LED_BUILTIN, LOW);
         delay(2000);
+        #endif
       }      
     }
     else    //Otherwise we keep running without LEDs
