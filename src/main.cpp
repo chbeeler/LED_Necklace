@@ -14,7 +14,6 @@
 
 #define SERIAL_OUTPUT
 #define USE_BLE
-#define USE_RESET_TO_POWER_OFF
 
 extern BLEUart bleuart;   // global
 
@@ -198,22 +197,20 @@ void shutdownISR()
 
 void setup() {
   
-  batteryInit();
-  
-  //Check battery voltage and power off if low
-  int cnt = 0;
-  do {
-    batteryUpdate(bleGetVbatThres());
-    cnt++;
-    delay(300);
-  }while((vbusConnected() == false) && (getBatteryVoltage() < 3.77f) && (cnt < 5));
-  if(cnt >= 5)
+  // If low-battery reset flag was set, go directly to SYSTEMOFF.
+  if (NRF_POWER->GPREGRET == 0xA7)
   {
-    pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
-    pinMode(LED_BUILTIN, INPUT);   // off
-    delay(20000);
+    NRF_POWER->GPREGRET = 0;
+    pinMode(LED_CHANNEL, INPUT_PULLDOWN);
+    pinMode(LED_BUILTIN, INPUT);
+    delay(10000);
+    NRF_POWER->DCDCEN = 1;  // 87uA instead of 100u
+    QSPIF_sleep();
+    delay(10000);
     NRF_POWER->SYSTEMOFF = 1;
   }
+  
+  batteryInit();
   
   Serial.begin(115200);
   /*while (!Serial) {
@@ -250,12 +247,6 @@ void setup() {
   pinMode(D2, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(D2), shutdownISR, FALLING);
 
-  //NFC.begin();
-  //NFC.setURI("https://www.viega.ch");
-  //NFC.setTXTmessage("Hello World!", "en");
-  // start the NFC module
-  //NFC.start();
-
   Serial.println("PDM audio - started");
 
   /*if(chargeCurrentSelection == charge_current_100)
@@ -275,10 +266,6 @@ void setup() {
 #endif
 }
 
-/*void loop() 
-{
-  delay(1);
-}*/
 void loop() 
 {
   if(digitalRead(7))
@@ -289,32 +276,7 @@ void loop()
     char c = Serial.read();
     if(c == 'o')
       lowPowerTest = true;
-    /*else if(c == 'A')
-    {
-      pinMode(P1_8, OUTPUT);
-      digitalWrite(P1_8, HIGH);   //15.7mA
-    }
-    else if(c == 'a')
-    {
-      pinMode(P1_8, OUTPUT);
-      digitalWrite(P1_8, LOW);    //8.4mA
-    }
-    else if(c == 'i')
-    {
-      pinMode(P1_8, INPUT);
-      digitalWrite(P1_8, LOW);
-    }*/
-
   }
-  /*if (Serial.available() > 3) 
-  {
-    v = Serial.parseInt();        // read number -1..255
-    if(v < 0 || v > -255)
-      analogWrite(LED_CHANNEL, -v);   // test LED brightness
-    else
-      digitalWrite(LED_CHANNEL, HIGH);
-    Serial.println(v);
-  }*/
 
   batteryUpdate(bleGetVbatThres());
   if (((batteryIsLow() == true) && (vbusConnected() == false)) || lowPowerTest || ((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2))) {
@@ -328,45 +290,17 @@ void loop()
       if(lowBattery == false)
       {
         lowBattery = true;
-        delay(10000);
-        bleuart.print("LED Pin input");
-        // Immediately stop LEDs
+                
         pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
-        
-        delay(10000);
-        bleuart.print("Board LED input");
-        //digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
-        pinMode(LED_BUILTIN, INPUT);   // off
+        // pinMode(LED_BUILTIN, INPUT);   // off
+        // #ifdef USE_PDM
+        // PDM.end();
+        // #endif
+        // ble_sleep();
 
-        delay(10000);
-        bleuart.print("PDM end");
-        // Stop microphone / PDM to reduce current
-        #ifdef USE_PDM
-        PDM.end();
-        #endif
-
-        /*BLE.stopAdvertise();
-        BLE.disconnect();
-        BLE.end();  //2.17mA    /2.62mA (DC=1)*/
-
-        /*delay(20000);
-        bleuart.print("QSPIF_sleep");
-        QSPIF_sleep();*/
-        
-        delay(20000);
-        
-        ble_sleep();
-
-        delay(20000);
-        #ifdef USE_RESET_TO_POWER_OFF
+        NRF_POWER->GPREGRET  = 0xA7;
+        __DSB(); __ISB();
         NVIC_SystemReset();
-        #else
-        NRF_POWER->SYSTEMOFF = 1;   // 0.65mA      0.65mA (DC=1)
-
-        pinMode(LED_BUILTIN, OUTPUT);   // off
-        digitalWrite(LED_BUILTIN, LOW);
-        delay(2000);
-        #endif
       }      
     }
     else    //Otherwise we keep running without LEDs
