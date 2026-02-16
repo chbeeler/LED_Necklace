@@ -10,6 +10,7 @@
 
 #include <Adafruit_SPIFlash.h>
 #include <LSM6DS3.h>
+#include <bluefruit.h>
 //#include <nrf52840.h>
 
 #define SERIAL_OUTPUT
@@ -65,13 +66,19 @@ void onPDMdata();
 #endif
 
 Adafruit_FlashTransport_QSPI flashTransport;
+Adafruit_SPIFlash flash(&flashTransport);
 LSM6DS3 myIMU; // Default is I2C mode
 
-void QSPIF_sleep(void)
-{
-  flashTransport.begin();
-  flashTransport.runCommand(0xB9);
-  flashTransport.end();
+bool deepPowerDown(Adafruit_SPIFlash& flash, Adafruit_FlashTransport& transport) {
+  uint32_t id_before = flash.getJEDECID();
+
+  transport.begin();
+  transport.runCommand(0xB9);  // SPI deep power-down command
+  delay(10);
+
+  uint32_t id_after = flash.getJEDECID();
+
+  return (id_after == 0xFFFFFF || id_after == 0xFFFFFFFF);
 }
 
 void setupWakeUpInterrupt()
@@ -201,13 +208,20 @@ void setup() {
   if (NRF_POWER->GPREGRET == 0xA7)
   {
     NRF_POWER->GPREGRET = 0;
-    pinMode(LED_CHANNEL, INPUT_PULLDOWN);
-    pinMode(LED_BUILTIN, INPUT);
-    delay(10000);
-    NRF_POWER->DCDCEN = 1;  // 87uA instead of 100u
-    QSPIF_sleep();
-    delay(10000);
-    NRF_POWER->SYSTEMOFF = 1;
+
+    flash.begin();
+    Bluefruit.begin();
+
+    if (!deepPowerDown(flash, flashTransport)) {
+      pinMode(LED_BUILTIN, OUTPUT);
+      digitalWrite(LED_BUILTIN, LOW);
+      while (1) {
+        yield();
+      }
+    }
+
+    flash.end();
+    sd_power_system_off();
   }
   
   batteryInit();
