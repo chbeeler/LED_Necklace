@@ -1,5 +1,6 @@
 #include "ble_control.h"
 #include <Arduino.h>
+#include <nrf_soc.h>
 
 BLEUart bleuart;   // global
 
@@ -31,6 +32,9 @@ static uint16_t vol_max      = 0;
 
 static const uint8_t MODE_EQ       = 1;
 static const uint8_t MODE_CONSTANT = 2;
+static const uint8_t MODE_POWEROFF = 3;
+static const uint8_t MODE_BOOTLOADER = 55;
+static const uint8_t DFU_MAGIC_UF2_RESET = 0x57;
 
 // ===== flags / buffers filled by BLE callbacks =====
 static volatile bool g_brightness_written = false;
@@ -138,6 +142,18 @@ static void disconnectBle() {
   }
 }
 
+static void resetToUf2Bootloader(void)
+{
+  // Prefer SoftDevice API when BLE stack is active.
+  uint32_t err = sd_power_gpregret_set(0, DFU_MAGIC_UF2_RESET);
+  if (err != NRF_SUCCESS) {
+    NRF_POWER->GPREGRET = DFU_MAGIC_UF2_RESET;
+  }
+  __DSB();
+  __ISB();
+  NVIC_SystemReset();
+}
+
 void ble_sleep(void) {
   Bluefruit.Advertising.restartOnDisconnect(false);
   disconnectBle();
@@ -207,7 +223,7 @@ void bleInit(uint16_t initialBrightness)
   debugCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   debugCharacteristic.setFixedLen(1);
   debugCharacteristic.setWriteCallback(cb_mode);
-  debugCharacteristic.setUserDescriptor("Mode (0=Off,1=EQ,2=Constant)");
+  debugCharacteristic.setUserDescriptor("Mode (0=Off,1=EQ,2=Constant,3=PowerOff)");
   debugCharacteristic.begin();
 
   // vBatThres (uint32), read/write (V*10)
@@ -223,7 +239,7 @@ void bleInit(uint16_t initialBrightness)
   filterCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   filterCharacteristic.setFixedLen(4);
   filterCharacteristic.setWriteCallback(cb_filter);
-  filterCharacteristic.setUserDescriptor("Filter amount (0..255)");
+  filterCharacteristic.setUserDescriptor("Filter speed (0..255)");
   filterCharacteristic.begin();
 
   // settings string (variable length <= 64)
@@ -317,9 +333,15 @@ void bleUpdate()
 
   if (g_mode_written) {
     g_mode_written = false;
+    if (g_mode_u8 == MODE_BOOTLOADER) {
+      debugCharacteristic.write8(g_mode_u8);
+      resetToUf2Bootloader();
+      return;
+    }
+
     ledMode = g_mode_u8;
     debugCharacteristic.write8(ledMode);
-    if(g_mode_u8 == 3)
+    if (g_mode_u8 == MODE_POWEROFF)
       lowPowerTest = true;
     writeSettingsString();
   }
