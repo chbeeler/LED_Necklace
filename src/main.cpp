@@ -53,11 +53,19 @@ static uint16_t vol_window_min = 0xFFFF;
 static uint16_t vol_window_max = 0;
 static uint32_t vol_window_start_ms = 0;
 
+static const uint8_t MODE_OFF      = 0;
+static const uint8_t MODE_EQ       = 1;
+static const uint8_t MODE_CONSTANT = 2;
+static const uint8_t MODE_AEQ      = 3;
+static const uint8_t MODE_POWEROFF = 9;
+
 unsigned long lastBatSampleMs = 0;
 bool lowBattery = false;
 
 int brightness = 100;
 float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune this)
+float autoSensitivityF = 8.0f;
+float autoNoiseFloorF = 10.0f;
 
 bool lowPowerTest = false;
 
@@ -141,9 +149,24 @@ void updateLEDs()
   if (loud_u16 < vol_window_min) vol_window_min = loud_u16;
   if (loud_u16 > vol_window_max) vol_window_max = loud_u16;
 
+  uint8_t ledMode = getLedMode();
   if ((uint32_t)(now_ms - vol_window_start_ms) >= VOL_RANGE_WINDOW_MS) {
     if (vol_window_min == 0xFFFF) vol_window_min = 0;
     bleSetVolMinMax(vol_window_min, vol_window_max);
+
+    if (ledMode == MODE_AEQ) {
+      float targetNoiseFloor = (float)vol_window_min;
+      float dynamicRange = (float)vol_window_max - (float)vol_window_min;
+      if (dynamicRange < 1.0f) dynamicRange = 1.0f;
+      float targetSensitivity = 100.0f / dynamicRange;
+
+      float aeqAlpha = bleGetAeqFilterAlpha();
+      if (aeqAlpha < 0.0f) aeqAlpha = 0.0f;
+      if (aeqAlpha > 1.0f) aeqAlpha = 1.0f;
+
+      autoNoiseFloorF += aeqAlpha * (targetNoiseFloor - autoNoiseFloorF);
+      autoSensitivityF += aeqAlpha * (targetSensitivity - autoSensitivityF);
+    }
 
     // Restart window
     vol_window_start_ms = now_ms;
@@ -151,14 +174,24 @@ void updateLEDs()
     vol_window_max = 0;
   }
 
+  float effectiveNoiseFloor = bleGetNoiseFloor();
+  float effectiveSensitivity = sensitivityF;
+  if (ledMode == MODE_AEQ) {
+    effectiveNoiseFloor = autoNoiseFloorF;
+    effectiveSensitivity = autoSensitivityF;
+  } else {
+    autoNoiseFloorF = effectiveNoiseFloor;
+    autoSensitivityF = effectiveSensitivity;
+  }
+
   // ---- Apply noise floor ----
-  float effectiveLoudness = filteredLoudness - bleGetNoiseFloor();
+  float effectiveLoudness = filteredLoudness - effectiveNoiseFloor;
   if (effectiveLoudness < 0.0f) {
     effectiveLoudness = 0.0f;
   }
 
   // ---- Map loudness to LED brightness ----
-  float ledValueF = effectiveLoudness * sensitivityF * ((float)brightness)/100.0f;
+  float ledValueF = effectiveLoudness * effectiveSensitivity * ((float)brightness)/100.0f;
 
   if (ledValueF > (float)pwmMax)
     ledValueF = (float)pwmMax;
@@ -168,10 +201,13 @@ void updateLEDs()
   if (ledValue > brightness)
     ledValue = brightness;
 
-  switch(getLedMode())
+  switch(ledMode)
   {
-    case 0: ledValue = 0; break;
-    case 2: ledValue = brightness; break;
+    case MODE_OFF: ledValue = 0; break;
+    case MODE_CONSTANT: ledValue = brightness; break;
+    case MODE_POWEROFF: ledValue = 0; break;
+    default:
+      break;
   }
 
   unsigned long t = millis();

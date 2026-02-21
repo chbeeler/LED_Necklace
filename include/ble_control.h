@@ -12,4 +12,5 @@ uint8_t getLedMode();
 float getFilterAlpha();
 float bleGetSensitivity();
 float bleGetNoiseFloor();
+float bleGetAeqFilterAlpha();
 void bleSetVolMinMax(uint16_t vol_min, uint16_t vol_max);
