@@ -15,6 +15,7 @@ extern "C" {
 #include <Adafruit_SPIFlash.h>
 #include <LSM6DS3.h>
 #include <bluefruit.h>
+#include <math.h>
 //#include <nrf52840.h>
 
 #define SERIAL_OUTPUT
@@ -65,6 +66,41 @@ float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune thi
 
 bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
+volatile bool nfcEffectTrigger = false;
+bool nfcEffectActive = false;
+uint32_t nfcEffectStartMs = 0;
+
+static const uint32_t NFC_EFFECT_DURATION_MS = 4000UL;
+static const float NFC_EFFECT_FREQUENCY_HZ = 0.8f;
+static const int NFC_EFFECT_MIN = 5;
+static const int NFC_EFFECT_MAX = 250;
+
+static bool nfc_rc_ok(int rc)
+{
+  return (rc == 0) || ((uint32_t)rc == 0x0BAD0000UL);
+}
+
+static void updateNfcEffect()
+{
+  uint32_t elapsed_ms = millis() - nfcEffectStartMs;
+  if (elapsed_ms >= NFC_EFFECT_DURATION_MS) {
+    nfcEffectActive = false;
+    return;
+  }
+
+  float t_sec = (float)elapsed_ms / 1000.0f;
+  float phase = 2.0f * PI * NFC_EFFECT_FREQUENCY_HZ * t_sec;
+  float wave = 0.5f * (sinf(phase) + 1.0f);
+  int ledValue = NFC_EFFECT_MIN + (int)((float)(NFC_EFFECT_MAX - NFC_EFFECT_MIN) * wave);
+
+  if (ledValue < 0) {
+    ledValue = 0;
+  } else if (ledValue > (int)pwmMax) {
+    ledValue = pwmMax;
+  }
+
+  analogWrite(LED_CHANNEL, ledValue);
+}
 
 #ifdef USE_PDM
 void onPDMdata();
@@ -73,9 +109,12 @@ void onPDMdata();
 static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, size_t data_length)
 {
   (void)context;
-  (void)event;
   (void)data;
   (void)data_length;
+
+  if (event == NFC_T2T_EVENT_DATA_READ) {
+    nfcEffectTrigger = true;
+  }
 }
 
 Adafruit_FlashTransport_QSPI flashTransport;
@@ -290,16 +329,18 @@ void setup() {
 
   // NFC Type 2 Tag setup
   int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
-  if (nfc_err == 0) {
-    // NDEF URI record for "https://example.com".
+  if (nfc_rc_ok(nfc_err)) {
+    // NDEF URI record for "https://wa.me/41774321412?text=Hey%2C%20cool%20necklace%21".
     // nfc_t2t_payload_set expects NDEF payload bytes in RAM.
     static uint8_t ndef_msg[] = {
-      0xD1, 0x01, 0x0C, 0x55, 0x04,
-      'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm'
+      0xD1, 0x01, 0x33, 0x55, 0x03,
+      'w', 'a', '.', 'm', 'e', '/', '4', '1', '7', '7', '4', '3', '2', '1', '4', '1', '2',
+      '?', 't', 'e', 'x', 't', '=', 'H', 'e', 'y', '%', '2', 'C', '%', '2', '0',
+      'c', 'o', 'o', 'l', '%', '2', '0', 'n', 'e', 'c', 'k', 'l', 'a', 'c', 'e', '%', '2', '1'
     };
 
     nfc_err = nfc_t2t_payload_set(ndef_msg, sizeof(ndef_msg));
-    if (nfc_err == 0) {
+    if (nfc_rc_ok(nfc_err)) {
       nfc_err = nfc_t2t_emulation_start();
     }
   }
@@ -322,6 +363,12 @@ void loop()
   if (shutdownIrqSeen) {
     shutdownIrqSeen = false;
     lowPowerTest = true;
+  }
+
+  if (nfcEffectTrigger) {
+    nfcEffectTrigger = false;
+    nfcEffectActive = true;
+    nfcEffectStartMs = millis();
   }
 
   if (low_power_condition) {
@@ -356,18 +403,19 @@ void loop()
   }
   if (!low_power_condition)
   {
-    // Wait for samples to be read
-    if (samplesRead) 
-    {
+    if (nfcEffectActive) {
+      updateNfcEffect();
+    } else if (samplesRead) {
+      // Wait for samples to be read
       updateLEDs();
+    }
 
 #ifdef USE_BLE
-      bleSetVBat_mV(getBatteryVoltage_mV());
-      bleUpdate();
-      brightness = bleGetBrightness();
-      sensitivityF = bleGetSensitivity();
+    bleSetVBat_mV(getBatteryVoltage_mV());
+    bleUpdate();
+    brightness = bleGetBrightness();
+    sensitivityF = bleGetSensitivity();
 #endif
-    }
   }
   delay(2);
 }
