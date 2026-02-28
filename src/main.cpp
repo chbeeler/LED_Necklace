@@ -11,6 +11,7 @@ extern "C" {
 
 #include "battery.h"
 #include "ble_control.h"
+#include "nfc_diag.h"
 
 #include <Adafruit_SPIFlash.h>
 #include <LSM6DS3.h>
@@ -77,8 +78,32 @@ void onPDMdata();
 
 static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, size_t data_length)
 {
-  (void)context; (void)data; (void)data_length;
-  // You can log events if you want
+  (void)context;
+  (void)data;
+
+  g_nfc_diag.t2t_last_event = (uint32_t)event;
+  g_nfc_diag.t2t_last_len = (uint32_t)data_length;
+
+  switch (event) {
+    case NFC_T2T_EVENT_NONE:
+      g_nfc_diag.t2t_event_none++;
+      break;
+    case NFC_T2T_EVENT_FIELD_ON:
+      g_nfc_diag.t2t_field_on++;
+      break;
+    case NFC_T2T_EVENT_FIELD_OFF:
+      g_nfc_diag.t2t_field_off++;
+      break;
+    case NFC_T2T_EVENT_DATA_READ:
+      g_nfc_diag.t2t_data_read++;
+      break;
+    case NFC_T2T_EVENT_STOPPED:
+      g_nfc_diag.t2t_stopped++;
+      break;
+    default:
+      g_nfc_diag.t2t_other++;
+      break;
+  }
 }
 
 Adafruit_FlashTransport_QSPI flashTransport;
@@ -229,6 +254,8 @@ void setup() {
   Serial.println("\n[BOOT] setup()");
   Serial.print("[BOOT] GPREGRET=0x");
   Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
+  Serial.print("[BOOT] UICR->NFCPINS=0x");
+  Serial.println((unsigned int)NRF_UICR->NFCPINS, HEX);
 #endif
   
   // If low-battery reset flag was set, go directly to SYSTEMOFF.
@@ -316,6 +343,7 @@ void setup() {
     Serial.print("NFC setup failed: ");
     Serial.println(nfc_err);
   } else {
+    Serial.println("[NFC] t2t_setup ok");
     // NDEF URI record for "https://example.com".
     // nfc_t2t_payload_set expects NDEF payload bytes in RAM.
     static uint8_t ndef_msg[] = {
@@ -328,10 +356,13 @@ void setup() {
       Serial.print("NFC payload set failed: ");
       Serial.println(nfc_err);
     } else {
+      Serial.println("[NFC] payload_set ok");
       nfc_err = nfc_t2t_emulation_start();
       if (nfc_err != 0) {
         Serial.print("NFC emulation start failed: ");
         Serial.println(nfc_err);
+      } else {
+        Serial.println("[NFC] emulation started");
       }
     }
   }
@@ -363,6 +394,62 @@ void loop()
     Serial.print((int)vbusConnected());
     Serial.print(" gp=0x");
     Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
+
+    Serial.print("[NFC] t2t on/off/read/stop/other=");
+    Serial.print((unsigned long)g_nfc_diag.t2t_field_on);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.t2t_field_off);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.t2t_data_read);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.t2t_stopped);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.t2t_other);
+    Serial.print(" last=");
+    Serial.print((unsigned long)g_nfc_diag.t2t_last_event);
+    Serial.print(" len=");
+    Serial.println((unsigned long)g_nfc_diag.t2t_last_len);
+
+    Serial.print("[NFC] nfct det/lost/sel/rxs/rxe/txs/txe/err/other=");
+    Serial.print((unsigned long)g_nfc_diag.nfct_field_detected);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_field_lost);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_selected);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_rx_framestart);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_rx_frameend);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_tx_framestart);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_tx_frameend);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_error);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.nfct_other);
+    Serial.print(" last=");
+    Serial.println((unsigned long)g_nfc_diag.nfct_last_event);
+
+    Serial.print("[NFC] hf req/ready/timeout/release/activate=");
+    Serial.print((unsigned long)g_nfc_diag.hfclk_request_count);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.hfclk_wait_ready_count);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.hfclk_wait_timeout_count);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.hfclk_release_count);
+    Serial.print("/");
+    Serial.println((unsigned long)g_nfc_diag.nfct_activate_count);
+
+    Serial.print("[NFC] cb req/copy ctx_len/data_len=");
+    Serial.print((unsigned long)g_nfc_diag.cb_request_count);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.cb_copy_data_count);
+    Serial.print(" ");
+    Serial.print((unsigned long)g_nfc_diag.cb_last_ctx_len);
+    Serial.print("/");
+    Serial.println((unsigned long)g_nfc_diag.cb_last_data_len);
   }
 #endif
 
