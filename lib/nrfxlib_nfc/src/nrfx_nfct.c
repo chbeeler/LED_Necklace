@@ -34,7 +34,6 @@
 #if NRFX_CHECK(NRFX_NFCT_ENABLED)
 
 #include <nrfx_nfct.h>
-#include "nfc_diag.h"
 
 #define NRFX_LOG_MODULE NFCT
 #include <nrfx_log.h>
@@ -712,7 +711,6 @@ void nrfx_nfct_autocolres_disable(void)
 
 void nrfx_nfct_irq_handler(void)
 {
-    g_nfc_diag.nfct_irq_count++;
     nrfx_nfct_field_state_t current_field = NRFX_NFC_FIELD_STATE_NONE;
 
     if (NRFX_NFCT_EVT_ACTIVE(FIELDDETECTED))

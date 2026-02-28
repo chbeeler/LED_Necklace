@@ -4,20 +4,17 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <string.h>
 
 #include "nrf.h"
 #include "nrf_sdm.h"
 #include "nrf_soc.h"
 #include "nrf_nvic.h"
-#include "nfc_diag.h"
 
 static nfc_lib_cb_resolve_t m_nfc_cb_resolve;
 
 /* Allocate enough for Type 4T (2 x 259 bytes); Type 2T needs only 16 bytes. */
 static uint8_t m_nfc_platform_buffer[NFC_PLATFORM_T4T_BUFFER_SIZE * 2U];
 static bool m_hfclk_requested;
-volatile nfc_diag_t g_nfc_diag;
 
 #define HFCLK_WAIT_LOOPS 200000UL
 
@@ -90,11 +87,6 @@ static bool hfclk_wait_ready(void)
     return false;
 }
 
-void nfc_diag_reset(void)
-{
-    (void)memset((void *)&g_nfc_diag, 0, sizeof(g_nfc_diag));
-}
-
 int nfc_platform_setup(nfc_lib_cb_resolve_t nfc_lib_cb_resolve, uint8_t * p_irq_priority)
 {
     if ((nfc_lib_cb_resolve == NULL) || (p_irq_priority == NULL)) {
@@ -104,23 +96,16 @@ int nfc_platform_setup(nfc_lib_cb_resolve_t nfc_lib_cb_resolve, uint8_t * p_irq_
     m_nfc_cb_resolve = nfc_lib_cb_resolve;
     *p_irq_priority = 7;
     m_hfclk_requested = false;
-    nfc_diag_reset();
-    g_nfc_diag.platform_setup_count++;
 
     // Platform integration requirement: hook and enable NFCT IRQ in this runtime.
     if (softdevice_enabled()) {
-        g_nfc_diag.platform_setup_used_sd = 1;
-        g_nfc_diag.platform_setup_clear_rc = sd_nvic_ClearPendingIRQ(NFCT_IRQn);
-        g_nfc_diag.platform_setup_prio_rc = sd_nvic_SetPriority(NFCT_IRQn, *p_irq_priority);
-        g_nfc_diag.platform_setup_enable_rc = sd_nvic_EnableIRQ(NFCT_IRQn);
+        (void)sd_nvic_ClearPendingIRQ(NFCT_IRQn);
+        (void)sd_nvic_SetPriority(NFCT_IRQn, *p_irq_priority);
+        (void)sd_nvic_EnableIRQ(NFCT_IRQn);
     } else {
-        g_nfc_diag.platform_setup_used_sd = 0;
         NVIC_ClearPendingIRQ(NFCT_IRQn);
         NVIC_SetPriority(NFCT_IRQn, *p_irq_priority);
         NVIC_EnableIRQ(NFCT_IRQn);
-        g_nfc_diag.platform_setup_clear_rc = NRF_SUCCESS;
-        g_nfc_diag.platform_setup_prio_rc = NRF_SUCCESS;
-        g_nfc_diag.platform_setup_enable_rc = NRF_SUCCESS;
     }
 
     return 0;
@@ -174,59 +159,17 @@ void nfc_platform_event_handler(nrfx_nfct_evt_t const * p_event)
 
     switch (p_event->evt_id) {
     case NRFX_NFCT_EVT_FIELD_DETECTED:
-        g_nfc_diag.nfct_field_detected++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_FIELD_DETECTED;
         hfclk_request();
-        g_nfc_diag.hfclk_request_count++;
         if (hfclk_wait_ready()) {
-            g_nfc_diag.hfclk_wait_ready_count++;
             nrfx_nfct_state_force(NRFX_NFCT_STATE_ACTIVATED);
-            g_nfc_diag.nfct_activate_count++;
-        } else {
-            g_nfc_diag.hfclk_wait_timeout_count++;
         }
         break;
 
     case NRFX_NFCT_EVT_FIELD_LOST:
-        g_nfc_diag.nfct_field_lost++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_FIELD_LOST;
         hfclk_release();
-        g_nfc_diag.hfclk_release_count++;
-        break;
-
-    case NRFX_NFCT_EVT_SELECTED:
-        g_nfc_diag.nfct_selected++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_SELECTED;
-        break;
-
-    case NRFX_NFCT_EVT_RX_FRAMESTART:
-        g_nfc_diag.nfct_rx_framestart++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_RX_FRAMESTART;
-        break;
-
-    case NRFX_NFCT_EVT_RX_FRAMEEND:
-        g_nfc_diag.nfct_rx_frameend++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_RX_FRAMEEND;
-        break;
-
-    case NRFX_NFCT_EVT_TX_FRAMESTART:
-        g_nfc_diag.nfct_tx_framestart++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_TX_FRAMESTART;
-        break;
-
-    case NRFX_NFCT_EVT_TX_FRAMEEND:
-        g_nfc_diag.nfct_tx_frameend++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_TX_FRAMEEND;
-        break;
-
-    case NRFX_NFCT_EVT_ERROR:
-        g_nfc_diag.nfct_error++;
-        g_nfc_diag.nfct_last_event = NRFX_NFCT_EVT_ERROR;
         break;
 
     default:
-        g_nfc_diag.nfct_other++;
-        g_nfc_diag.nfct_last_event = (uint32_t)p_event->evt_id;
         break;
     }
 }
@@ -237,13 +180,6 @@ void nfc_platform_cb_request(const void    * p_ctx,
                              size_t          data_len,
                              bool            copy_data)
 {
-    g_nfc_diag.cb_request_count++;
-    g_nfc_diag.cb_last_ctx_len = (uint32_t)ctx_len;
-    g_nfc_diag.cb_last_data_len = (uint32_t)data_len;
-    if (copy_data) {
-        g_nfc_diag.cb_copy_data_count++;
-    }
-
     (void)ctx_len;
     (void)data_len;
     (void)copy_data;

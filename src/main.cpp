@@ -11,7 +11,6 @@ extern "C" {
 
 #include "battery.h"
 #include "ble_control.h"
-#include "nfc_diag.h"
 
 #include <Adafruit_SPIFlash.h>
 #include <LSM6DS3.h>
@@ -20,11 +19,6 @@ extern "C" {
 
 #define SERIAL_OUTPUT
 #define USE_BLE
-
-// Temporary diagnostics to verify runtime behavior over USB CDC serial.
-#define DEBUG_BOOT_SERIAL 1
-#define DEBUG_DISABLE_LOW_POWER_SHUTDOWN 1
-#define DEBUG_DISABLE_D2_INTERRUPT 1
 
 extern BLEUart bleuart;   // global
 
@@ -71,15 +65,6 @@ float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune thi
 
 bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
-static int g_nfc_setup_err = -999;
-static int g_nfc_payload_err = -999;
-static int g_nfc_start_err = -999;
-
-// nrfx in this core uses 0x0BAD0000 as NRFX_SUCCESS.
-static bool nfc_rc_ok(int rc)
-{
-  return (rc == 0) || ((uint32_t)rc == 0x0BAD0000UL);
-}
 
 #ifdef USE_PDM
 void onPDMdata();
@@ -88,31 +73,9 @@ void onPDMdata();
 static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, size_t data_length)
 {
   (void)context;
+  (void)event;
   (void)data;
-
-  g_nfc_diag.t2t_last_event = (uint32_t)event;
-  g_nfc_diag.t2t_last_len = (uint32_t)data_length;
-
-  switch (event) {
-    case NFC_T2T_EVENT_NONE:
-      g_nfc_diag.t2t_event_none++;
-      break;
-    case NFC_T2T_EVENT_FIELD_ON:
-      g_nfc_diag.t2t_field_on++;
-      break;
-    case NFC_T2T_EVENT_FIELD_OFF:
-      g_nfc_diag.t2t_field_off++;
-      break;
-    case NFC_T2T_EVENT_DATA_READ:
-      g_nfc_diag.t2t_data_read++;
-      break;
-    case NFC_T2T_EVENT_STOPPED:
-      g_nfc_diag.t2t_stopped++;
-      break;
-    default:
-      g_nfc_diag.t2t_other++;
-      break;
-  }
+  (void)data_length;
 }
 
 Adafruit_FlashTransport_QSPI flashTransport;
@@ -254,26 +217,10 @@ void shutdownISR()
 
 void setup() {
   Serial.begin(115200);
-#if DEBUG_BOOT_SERIAL
-  uint32_t serial_wait_start = millis();
-  while (!Serial && (millis() - serial_wait_start < 2500UL)) {
-    delay(10);
-  }
-  delay(100);
-  Serial.println("\n[BOOT] setup()");
-  Serial.print("[BOOT] GPREGRET=0x");
-  Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
-  Serial.print("[BOOT] UICR->NFCPINS=0x");
-  Serial.println((unsigned int)NRF_UICR->NFCPINS, HEX);
-#endif
   
   // If low-battery reset flag was set, go directly to SYSTEMOFF.
   if (NRF_POWER->GPREGRET == 0xA7)
   {
-#if DEBUG_DISABLE_LOW_POWER_SHUTDOWN
-    NRF_POWER->GPREGRET = 0;
-    Serial.println("[BOOT] Ignoring low-battery SYSTEMOFF path for debug");
-#else
     NRF_POWER->GPREGRET = 0;
 
     flash.begin();
@@ -289,7 +236,6 @@ void setup() {
 
     flash.end();
     sd_power_system_off();
-#endif
   }
   
   batteryInit();
@@ -322,11 +268,7 @@ void setup() {
   //attachInterrupt(digitalPinToInterrupt(7), shutdownISR, RISING);
 
   pinMode(D2, INPUT_PULLUP);
-#if DEBUG_DISABLE_D2_INTERRUPT
-  Serial.println("[BOOT] D2 interrupt disabled for debug");
-#else
   attachInterrupt(digitalPinToInterrupt(D2), shutdownISR, FALLING);
-#endif
 
   Serial.println("PDM audio - started");
 
@@ -348,15 +290,7 @@ void setup() {
 
   // NFC Type 2 Tag setup
   int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
-  g_nfc_setup_err = nfc_err;
-  if (!nfc_rc_ok(nfc_err)) {
-    Serial.print("NFC setup failed: ");
-    Serial.print(nfc_err);
-    Serial.print(" (0x");
-    Serial.print((uint32_t)nfc_err, HEX);
-    Serial.println(")");
-  } else {
-    Serial.println("[NFC] t2t_setup ok");
+  if (nfc_err == 0) {
     // NDEF URI record for "https://example.com".
     // nfc_t2t_payload_set expects NDEF payload bytes in RAM.
     static uint8_t ndef_msg[] = {
@@ -365,26 +299,8 @@ void setup() {
     };
 
     nfc_err = nfc_t2t_payload_set(ndef_msg, sizeof(ndef_msg));
-    g_nfc_payload_err = nfc_err;
-    if (!nfc_rc_ok(nfc_err)) {
-      Serial.print("NFC payload set failed: ");
-      Serial.print(nfc_err);
-      Serial.print(" (0x");
-      Serial.print((uint32_t)nfc_err, HEX);
-      Serial.println(")");
-    } else {
-      Serial.println("[NFC] payload_set ok");
+    if (nfc_err == 0) {
       nfc_err = nfc_t2t_emulation_start();
-      g_nfc_start_err = nfc_err;
-      if (!nfc_rc_ok(nfc_err)) {
-        Serial.print("NFC emulation start failed: ");
-        Serial.print(nfc_err);
-        Serial.print(" (0x");
-        Serial.print((uint32_t)nfc_err, HEX);
-        Serial.println(")");
-      } else {
-        Serial.println("[NFC] emulation started");
-      }
     }
   }
 }
@@ -403,129 +319,11 @@ void loop()
                              lowPowerTest ||
                              ((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2));
 
-#if DEBUG_BOOT_SERIAL
-  static uint32_t lastHeartbeatMs = 0;
-  if ((millis() - lastHeartbeatMs) >= 1000UL) {
-    lastHeartbeatMs = millis();
-    Serial.print("[HB] Vbat=");
-    Serial.print(getBatteryVoltage(), 3);
-    Serial.print("V low=");
-    Serial.print((int)batteryIsLow());
-    Serial.print(" vbus=");
-    Serial.print((int)vbusConnected());
-    Serial.print(" gp=0x");
-    Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
-    Serial.print("[BOOT] UICR->NFCPINS=0x");
-    Serial.println((unsigned int)NRF_UICR->NFCPINS, HEX);
-
-    Serial.print("[NFC] init setup/payload/start=");
-    Serial.print(g_nfc_setup_err);
-    Serial.print("/");
-    Serial.print(g_nfc_payload_err);
-    Serial.print("/");
-    Serial.println(g_nfc_start_err);
-
-    Serial.print("[NFC] platform cnt/sd/rc clr/prio/en=");
-    Serial.print((unsigned long)g_nfc_diag.platform_setup_count);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.platform_setup_used_sd);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.platform_setup_clear_rc);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.platform_setup_prio_rc);
-    Serial.print("/");
-    Serial.println((unsigned long)g_nfc_diag.platform_setup_enable_rc);
-
-    Serial.print("[NFC] irq cnt/en/pend/prio=");
-    Serial.print((unsigned long)g_nfc_diag.nfct_irq_count);
-    Serial.print("/");
-    Serial.print((unsigned long)NVIC_GetEnableIRQ(NFCT_IRQn));
-    Serial.print("/");
-    Serial.print((unsigned long)NVIC_GetPendingIRQ(NFCT_IRQn));
-    Serial.print("/");
-    Serial.println((unsigned long)NVIC_GetPriority(NFCT_IRQn));
-
-    Serial.print("[NFC] reg field/intenset/evt_det/evt_lost=");
-    Serial.print((unsigned long)NRF_NFCT->FIELDPRESENT);
-    Serial.print("/");
-    Serial.print((unsigned long)NRF_NFCT->INTENSET);
-    Serial.print("/");
-    Serial.print((unsigned long)NRF_NFCT->EVENTS_FIELDDETECTED);
-    Serial.print("/");
-    Serial.println((unsigned long)NRF_NFCT->EVENTS_FIELDLOST);
-
-    Serial.print("[NFC] t2t on/off/read/stop/other=");
-    Serial.print((unsigned long)g_nfc_diag.t2t_field_on);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.t2t_field_off);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.t2t_data_read);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.t2t_stopped);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.t2t_other);
-    Serial.print(" last=");
-    Serial.print((unsigned long)g_nfc_diag.t2t_last_event);
-    Serial.print(" len=");
-    Serial.println((unsigned long)g_nfc_diag.t2t_last_len);
-
-    Serial.print("[NFC] nfct det/lost/sel/rxs/rxe/txs/txe/err/other=");
-    Serial.print((unsigned long)g_nfc_diag.nfct_field_detected);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_field_lost);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_selected);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_rx_framestart);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_rx_frameend);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_tx_framestart);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_tx_frameend);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_error);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.nfct_other);
-    Serial.print(" last=");
-    Serial.println((unsigned long)g_nfc_diag.nfct_last_event);
-
-    Serial.print("[NFC] hf req/ready/timeout/release/activate=");
-    Serial.print((unsigned long)g_nfc_diag.hfclk_request_count);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.hfclk_wait_ready_count);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.hfclk_wait_timeout_count);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.hfclk_release_count);
-    Serial.print("/");
-    Serial.println((unsigned long)g_nfc_diag.nfct_activate_count);
-
-    Serial.print("[NFC] cb req/copy ctx_len/data_len=");
-    Serial.print((unsigned long)g_nfc_diag.cb_request_count);
-    Serial.print("/");
-    Serial.print((unsigned long)g_nfc_diag.cb_copy_data_count);
-    Serial.print(" ");
-    Serial.print((unsigned long)g_nfc_diag.cb_last_ctx_len);
-    Serial.print("/");
-    Serial.println((unsigned long)g_nfc_diag.cb_last_data_len);
-  }
-#endif
-
   if (shutdownIrqSeen) {
     shutdownIrqSeen = false;
-    Serial.println("[IRQ] D2 FALLING");
+    lowPowerTest = true;
   }
 
-#if DEBUG_DISABLE_LOW_POWER_SHUTDOWN
-  if (low_power_condition) {
-    static uint32_t lastLowPowerMsgMs = 0;
-    if ((millis() - lastLowPowerMsgMs) >= 1000UL) {
-      lastLowPowerMsgMs = millis();
-      Serial.println("[DBG] Low-power shutdown condition detected (suppressed)");
-    }
-  }
-#else
   if (low_power_condition) {
     // Immediately stop LEDs
     analogWrite(LED_CHANNEL, 0);
@@ -556,7 +354,6 @@ void loop()
       delay(1000);
     }
   }
-#endif
   if (!low_power_condition)
   {
     // Wait for samples to be read
