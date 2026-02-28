@@ -3,13 +3,88 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "nrf.h"
+#include "nrf_sdm.h"
+#include "nrf_soc.h"
 
 static nfc_lib_cb_resolve_t m_nfc_cb_resolve;
 
 /* Allocate enough for Type 4T (2 x 259 bytes); Type 2T needs only 16 bytes. */
 static uint8_t m_nfc_platform_buffer[NFC_PLATFORM_T4T_BUFFER_SIZE * 2U];
+static bool m_hfclk_requested;
+
+#define HFCLK_WAIT_LOOPS 200000UL
+
+static bool softdevice_enabled(void)
+{
+    uint8_t enabled = 0;
+    uint32_t err = sd_softdevice_is_enabled(&enabled);
+
+    return (err == NRF_SUCCESS) && (enabled != 0U);
+}
+
+static bool hfclk_running(void)
+{
+    if (softdevice_enabled()) {
+        uint32_t running = 0;
+        if (sd_clock_hfclk_is_running(&running) == NRF_SUCCESS) {
+            return (running != 0U);
+        }
+    }
+
+    uint32_t state_masked = (NRF_CLOCK->HFCLKSTAT & CLOCK_HFCLKSTAT_STATE_Msk);
+    uint32_t src_masked = (NRF_CLOCK->HFCLKSTAT & CLOCK_HFCLKSTAT_SRC_Msk);
+
+    return (state_masked == (CLOCK_HFCLKSTAT_STATE_Running << CLOCK_HFCLKSTAT_STATE_Pos)) &&
+           (src_masked == (CLOCK_HFCLKSTAT_SRC_Xtal << CLOCK_HFCLKSTAT_SRC_Pos));
+}
+
+static void hfclk_request(void)
+{
+    if (m_hfclk_requested) {
+        return;
+    }
+
+    if (softdevice_enabled()) {
+        (void)sd_clock_hfclk_request();
+    } else {
+        NRF_CLOCK->EVENTS_HFCLKSTARTED = 0;
+        NRF_CLOCK->TASKS_HFCLKSTART = 1;
+    }
+
+    m_hfclk_requested = true;
+}
+
+static void hfclk_release(void)
+{
+    if (!m_hfclk_requested) {
+        return;
+    }
+
+    if (softdevice_enabled()) {
+        (void)sd_clock_hfclk_release();
+    } else {
+        NRF_CLOCK->TASKS_HFCLKSTOP = 1;
+    }
+
+    m_hfclk_requested = false;
+}
+
+static bool hfclk_wait_ready(void)
+{
+    uint32_t loops = HFCLK_WAIT_LOOPS;
+
+    while (loops-- > 0U) {
+        if (hfclk_running()) {
+            return true;
+        }
+        __NOP();
+    }
+
+    return false;
+}
 
 int nfc_platform_setup(nfc_lib_cb_resolve_t nfc_lib_cb_resolve, uint8_t * p_irq_priority)
 {
@@ -19,6 +94,7 @@ int nfc_platform_setup(nfc_lib_cb_resolve_t nfc_lib_cb_resolve, uint8_t * p_irq_
 
     m_nfc_cb_resolve = nfc_lib_cb_resolve;
     *p_irq_priority = 7;
+    m_hfclk_requested = false;
 
     return 0;
 }
@@ -69,9 +145,20 @@ void nfc_platform_event_handler(nrfx_nfct_evt_t const * p_event)
         return;
     }
 
-    if (p_event->evt_id == NRFX_NFCT_EVT_FIELD_DETECTED) {
-        /* HFCLK is typically already managed by SoftDevice in BLE builds. */
-        nrfx_nfct_state_force(NRFX_NFCT_STATE_ACTIVATED);
+    switch (p_event->evt_id) {
+    case NRFX_NFCT_EVT_FIELD_DETECTED:
+        hfclk_request();
+        if (hfclk_wait_ready()) {
+            nrfx_nfct_state_force(NRFX_NFCT_STATE_ACTIVATED);
+        }
+        break;
+
+    case NRFX_NFCT_EVT_FIELD_LOST:
+        hfclk_release();
+        break;
+
+    default:
+        break;
     }
 }
 
