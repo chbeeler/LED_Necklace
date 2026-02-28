@@ -75,6 +75,12 @@ static int g_nfc_setup_err = -999;
 static int g_nfc_payload_err = -999;
 static int g_nfc_start_err = -999;
 
+// nrfx in this core uses 0x0BAD0000 as NRFX_SUCCESS.
+static bool nfc_rc_ok(int rc)
+{
+  return (rc == 0) || ((uint32_t)rc == 0x0BAD0000UL);
+}
+
 #ifdef USE_PDM
 void onPDMdata();
 #endif
@@ -343,9 +349,12 @@ void setup() {
   // NFC Type 2 Tag setup
   int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
   g_nfc_setup_err = nfc_err;
-  if (nfc_err != 0) {
+  if (!nfc_rc_ok(nfc_err)) {
     Serial.print("NFC setup failed: ");
-    Serial.println(nfc_err);
+    Serial.print(nfc_err);
+    Serial.print(" (0x");
+    Serial.print((uint32_t)nfc_err, HEX);
+    Serial.println(")");
   } else {
     Serial.println("[NFC] t2t_setup ok");
     // NDEF URI record for "https://example.com".
@@ -357,16 +366,22 @@ void setup() {
 
     nfc_err = nfc_t2t_payload_set(ndef_msg, sizeof(ndef_msg));
     g_nfc_payload_err = nfc_err;
-    if (nfc_err != 0) {
+    if (!nfc_rc_ok(nfc_err)) {
       Serial.print("NFC payload set failed: ");
-      Serial.println(nfc_err);
+      Serial.print(nfc_err);
+      Serial.print(" (0x");
+      Serial.print((uint32_t)nfc_err, HEX);
+      Serial.println(")");
     } else {
       Serial.println("[NFC] payload_set ok");
       nfc_err = nfc_t2t_emulation_start();
       g_nfc_start_err = nfc_err;
-      if (nfc_err != 0) {
+      if (!nfc_rc_ok(nfc_err)) {
         Serial.print("NFC emulation start failed: ");
-        Serial.println(nfc_err);
+        Serial.print(nfc_err);
+        Serial.print(" (0x");
+        Serial.print((uint32_t)nfc_err, HEX);
+        Serial.println(")");
       } else {
         Serial.println("[NFC] emulation started");
       }
