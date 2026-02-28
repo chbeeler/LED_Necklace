@@ -4,7 +4,11 @@
 #ifdef USE_PDM
 #include <PDM.h>
 #endif
-//#include <NFCT.h>
+
+extern "C" {
+#include "nfc_t2t_lib.h"
+}
+
 #include "battery.h"
 #include "ble_control.h"
 
@@ -64,6 +68,12 @@ bool lowPowerTest = false;
 #ifdef USE_PDM
 void onPDMdata();
 #endif
+
+static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, size_t data_length)
+{
+  (void)context; (void)data; (void)data_length;
+  // You can log events if you want
+}
 
 Adafruit_FlashTransport_QSPI flashTransport;
 Adafruit_SPIFlash flash(&flashTransport);
@@ -278,6 +288,32 @@ void setup() {
 #ifdef USE_BLE
   bleInit(brightness);     // your existing global brightness
 #endif
+
+  // NFC Type 2 Tag setup
+  int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
+  if (nfc_err != 0) {
+    Serial.print("NFC setup failed: ");
+    Serial.println(nfc_err);
+  } else {
+    // NDEF URI record for "https://example.com".
+    // nfc_t2t_payload_set expects NDEF payload bytes in RAM.
+    static uint8_t ndef_msg[] = {
+      0xD1, 0x01, 0x0C, 0x55, 0x04,
+      'e', 'x', 'a', 'm', 'p', 'l', 'e', '.', 'c', 'o', 'm'
+    };
+
+    nfc_err = nfc_t2t_payload_set(ndef_msg, sizeof(ndef_msg));
+    if (nfc_err != 0) {
+      Serial.print("NFC payload set failed: ");
+      Serial.println(nfc_err);
+    } else {
+      nfc_err = nfc_t2t_emulation_start();
+      if (nfc_err != 0) {
+        Serial.print("NFC emulation start failed: ");
+        Serial.println(nfc_err);
+      }
+    }
+  }
 }
 
 void loop() 
