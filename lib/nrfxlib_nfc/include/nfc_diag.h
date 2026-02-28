@@ -9,6 +9,8 @@ extern "C" {
 
 typedef struct
 {
+    volatile uint32_t nfct_irq_count;
+
     volatile uint32_t t2t_event_none;
     volatile uint32_t t2t_field_on;
     volatile uint32_t t2t_field_off;

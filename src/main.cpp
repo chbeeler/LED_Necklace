@@ -395,6 +395,24 @@ void loop()
     Serial.print(" gp=0x");
     Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
 
+    Serial.print("[NFC] irq cnt/en/pend/prio=");
+    Serial.print((unsigned long)g_nfc_diag.nfct_irq_count);
+    Serial.print("/");
+    Serial.print((unsigned long)NVIC_GetEnableIRQ(NFCT_IRQn));
+    Serial.print("/");
+    Serial.print((unsigned long)NVIC_GetPendingIRQ(NFCT_IRQn));
+    Serial.print("/");
+    Serial.println((unsigned long)NVIC_GetPriority(NFCT_IRQn));
+
+    Serial.print("[NFC] reg field/intenset/evt_det/evt_lost=");
+    Serial.print((unsigned long)NRF_NFCT->FIELDPRESENT);
+    Serial.print("/");
+    Serial.print((unsigned long)NRF_NFCT->INTENSET);
+    Serial.print("/");
+    Serial.print((unsigned long)NRF_NFCT->EVENTS_FIELDDETECTED);
+    Serial.print("/");
+    Serial.println((unsigned long)NRF_NFCT->EVENTS_FIELDLOST);
+
     Serial.print("[NFC] t2t on/off/read/stop/other=");
     Serial.print((unsigned long)g_nfc_diag.t2t_field_on);
     Serial.print("/");
