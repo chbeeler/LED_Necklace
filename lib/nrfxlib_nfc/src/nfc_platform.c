@@ -105,6 +105,11 @@ int nfc_platform_setup(nfc_lib_cb_resolve_t nfc_lib_cb_resolve, uint8_t * p_irq_
     m_hfclk_requested = false;
     nfc_diag_reset();
 
+    // Platform integration requirement: hook and enable NFCT IRQ in this runtime.
+    NVIC_ClearPendingIRQ(NFCT_IRQn);
+    NVIC_SetPriority(NFCT_IRQn, *p_irq_priority);
+    NVIC_EnableIRQ(NFCT_IRQn);
+
     return 0;
 }
 
