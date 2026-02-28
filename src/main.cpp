@@ -71,6 +71,9 @@ float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune thi
 
 bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
+static int g_nfc_setup_err = -999;
+static int g_nfc_payload_err = -999;
+static int g_nfc_start_err = -999;
 
 #ifdef USE_PDM
 void onPDMdata();
@@ -339,6 +342,7 @@ void setup() {
 
   // NFC Type 2 Tag setup
   int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
+  g_nfc_setup_err = nfc_err;
   if (nfc_err != 0) {
     Serial.print("NFC setup failed: ");
     Serial.println(nfc_err);
@@ -352,12 +356,14 @@ void setup() {
     };
 
     nfc_err = nfc_t2t_payload_set(ndef_msg, sizeof(ndef_msg));
+    g_nfc_payload_err = nfc_err;
     if (nfc_err != 0) {
       Serial.print("NFC payload set failed: ");
       Serial.println(nfc_err);
     } else {
       Serial.println("[NFC] payload_set ok");
       nfc_err = nfc_t2t_emulation_start();
+      g_nfc_start_err = nfc_err;
       if (nfc_err != 0) {
         Serial.print("NFC emulation start failed: ");
         Serial.println(nfc_err);
@@ -394,6 +400,15 @@ void loop()
     Serial.print((int)vbusConnected());
     Serial.print(" gp=0x");
     Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
+    Serial.print("[BOOT] UICR->NFCPINS=0x");
+    Serial.println((unsigned int)NRF_UICR->NFCPINS, HEX);
+
+    Serial.print("[NFC] init setup/payload/start=");
+    Serial.print(g_nfc_setup_err);
+    Serial.print("/");
+    Serial.print(g_nfc_payload_err);
+    Serial.print("/");
+    Serial.println(g_nfc_start_err);
 
     Serial.print("[NFC] irq cnt/en/pend/prio=");
     Serial.print((unsigned long)g_nfc_diag.nfct_irq_count);
