@@ -20,6 +20,11 @@ extern "C" {
 #define SERIAL_OUTPUT
 #define USE_BLE
 
+// Temporary diagnostics to verify runtime behavior over USB CDC serial.
+#define DEBUG_BOOT_SERIAL 1
+#define DEBUG_DISABLE_LOW_POWER_SHUTDOWN 1
+#define DEBUG_DISABLE_D2_INTERRUPT 1
+
 extern BLEUart bleuart;   // global
 
 // ---- PWM configuration ----
@@ -64,6 +69,7 @@ int brightness = 100;
 float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune this)
 
 bool lowPowerTest = false;
+volatile bool shutdownIrqSeen = false;
 
 #ifdef USE_PDM
 void onPDMdata();
@@ -209,14 +215,29 @@ void updateLEDs()
 
 void shutdownISR()
 {
-  Serial.println("ISR");
+  shutdownIrqSeen = true;
 }
 
 void setup() {
+  Serial.begin(115200);
+#if DEBUG_BOOT_SERIAL
+  uint32_t serial_wait_start = millis();
+  while (!Serial && (millis() - serial_wait_start < 2500UL)) {
+    delay(10);
+  }
+  delay(100);
+  Serial.println("\n[BOOT] setup()");
+  Serial.print("[BOOT] GPREGRET=0x");
+  Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
+#endif
   
   // If low-battery reset flag was set, go directly to SYSTEMOFF.
   if (NRF_POWER->GPREGRET == 0xA7)
   {
+#if DEBUG_DISABLE_LOW_POWER_SHUTDOWN
+    NRF_POWER->GPREGRET = 0;
+    Serial.println("[BOOT] Ignoring low-battery SYSTEMOFF path for debug");
+#else
     NRF_POWER->GPREGRET = 0;
 
     flash.begin();
@@ -232,14 +253,10 @@ void setup() {
 
     flash.end();
     sd_power_system_off();
+#endif
   }
   
   batteryInit();
-  
-  Serial.begin(115200);
-  /*while (!Serial) {
-    // wait for serial
-  }*/
 
   analogWriteResolution(PWM_RES_BITS);
   pinMode(LED_CHANNEL, OUTPUT);
@@ -269,7 +286,11 @@ void setup() {
   //attachInterrupt(digitalPinToInterrupt(7), shutdownISR, RISING);
 
   pinMode(D2, INPUT_PULLUP);
+#if DEBUG_DISABLE_D2_INTERRUPT
+  Serial.println("[BOOT] D2 interrupt disabled for debug");
+#else
   attachInterrupt(digitalPinToInterrupt(D2), shutdownISR, FALLING);
+#endif
 
   Serial.println("PDM audio - started");
 
@@ -318,9 +339,6 @@ void setup() {
 
 void loop() 
 {
-  if(digitalRead(7))
-    Serial.println("1");
-
   if (Serial.available() > 0)
   {
     char c = Serial.read();
@@ -329,7 +347,40 @@ void loop()
   }
 
   batteryUpdate(bleGetVbatThres());
-  if (((batteryIsLow() == true) && (vbusConnected() == false)) || lowPowerTest || ((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2))) {
+  bool low_power_condition = ((batteryIsLow() == true) && (vbusConnected() == false)) ||
+                             lowPowerTest ||
+                             ((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2));
+
+#if DEBUG_BOOT_SERIAL
+  static uint32_t lastHeartbeatMs = 0;
+  if ((millis() - lastHeartbeatMs) >= 1000UL) {
+    lastHeartbeatMs = millis();
+    Serial.print("[HB] Vbat=");
+    Serial.print(getBatteryVoltage(), 3);
+    Serial.print("V low=");
+    Serial.print((int)batteryIsLow());
+    Serial.print(" vbus=");
+    Serial.print((int)vbusConnected());
+    Serial.print(" gp=0x");
+    Serial.println((unsigned int)NRF_POWER->GPREGRET, HEX);
+  }
+#endif
+
+  if (shutdownIrqSeen) {
+    shutdownIrqSeen = false;
+    Serial.println("[IRQ] D2 FALLING");
+  }
+
+#if DEBUG_DISABLE_LOW_POWER_SHUTDOWN
+  if (low_power_condition) {
+    static uint32_t lastLowPowerMsgMs = 0;
+    if ((millis() - lastLowPowerMsgMs) >= 1000UL) {
+      lastLowPowerMsgMs = millis();
+      Serial.println("[DBG] Low-power shutdown condition detected (suppressed)");
+    }
+  }
+#else
+  if (low_power_condition) {
     // Immediately stop LEDs
     analogWrite(LED_CHANNEL, 0);
     //analogWrite(LED_BUILTIN, pwmMax);
@@ -359,7 +410,8 @@ void loop()
       delay(1000);
     }
   }
-  else
+#endif
+  if (!low_power_condition)
   {
     // Wait for samples to be read
     if (samplesRead) 
