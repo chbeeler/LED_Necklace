@@ -16,6 +16,7 @@ extern "C" {
 #include <LSM6DS3.h>
 #include <bluefruit.h>
 #include <math.h>
+#include <string.h>
 //#include <nrf52840.h>
 
 #define SERIAL_OUTPUT
@@ -78,6 +79,40 @@ static const int NFC_EFFECT_MIN = 5;
 static const int NFC_EFFECT_MAX = 250;
 static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
+static const uint8_t NFC_URI_PREFIX = 0x04; // "https://"
+static const char NFC_URI_TEXT[] = "wa.me/41774321412?text=Hey%20Chris%2C%20cool%20necklace%21";
+
+static bool buildNdefUriRecord(const char *uri_text,
+                               uint8_t uri_prefix,
+                               uint8_t *out_buf,
+                               size_t out_buf_size,
+                               size_t *out_len)
+{
+  if ((uri_text == nullptr) || (out_buf == nullptr) || (out_len == nullptr)) {
+    return false;
+  }
+
+  size_t uri_len = strlen(uri_text);
+  if ((uri_len == 0U) || ((uri_len + 1U) > 255U)) {
+    return false;
+  }
+
+  size_t record_len = 5U + uri_len;
+  if (record_len > out_buf_size) {
+    return false;
+  }
+
+  // NDEF short record: MB|ME|SR, TNF=well-known, type='U' (URI)
+  out_buf[0] = 0xD1;
+  out_buf[1] = 0x01;
+  out_buf[2] = (uint8_t)(uri_len + 1U); // +1 for URI prefix byte
+  out_buf[3] = 0x55;                     // 'U'
+  out_buf[4] = uri_prefix;
+  memcpy(&out_buf[5], uri_text, uri_len);
+
+  *out_len = record_len;
+  return true;
+}
 
 static bool nfc_rc_ok(int rc)
 {
@@ -334,18 +369,17 @@ void setup() {
   // NFC Type 2 Tag setup
   int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
   if (nfc_rc_ok(nfc_err)) {
-    // NDEF URI record for "https://wa.me/41774321412?text=Hey%2C%20cool%20necklace%21".
-    // nfc_t2t_payload_set expects NDEF payload bytes in RAM.
-    static uint8_t ndef_msg[] = {
-      0xD1, 0x01, 0x33, 0x55, 0x03,
-      'w', 'a', '.', 'm', 'e', '/', '4', '1', '7', '7', '4', '3', '2', '1', '4', '1', '2',
-      '?', 't', 'e', 'x', 't', '=', 'H', 'e', 'y', '%', '2', 'C', '%', '2', '0',
-      'c', 'o', 'o', 'l', '%', '2', '0', 'n', 'e', 'c', 'k', 'l', 'a', 'c', 'e', '%', '2', '1'
-    };
+    // nfc_t2t_payload_set expects an NDEF payload buffer in RAM.
+    static uint8_t ndef_msg[260];
+    size_t ndef_len = 0;
 
-    nfc_err = nfc_t2t_payload_set(ndef_msg, sizeof(ndef_msg));
-    if (nfc_rc_ok(nfc_err)) {
-      nfc_err = nfc_t2t_emulation_start();
+    if (buildNdefUriRecord(NFC_URI_TEXT, NFC_URI_PREFIX, ndef_msg, sizeof(ndef_msg), &ndef_len)) {
+      nfc_err = nfc_t2t_payload_set(ndef_msg, ndef_len);
+      if (nfc_rc_ok(nfc_err)) {
+        nfc_err = nfc_t2t_emulation_start();
+      }
+    } else {
+      Serial.println("NFC URI build failed");
     }
   }
 }
