@@ -69,11 +69,15 @@ volatile bool shutdownIrqSeen = false;
 volatile bool nfcEffectTrigger = false;
 bool nfcEffectActive = false;
 uint32_t nfcEffectStartMs = 0;
+uint32_t lastBleCtrlUpdateMs = 0;
+uint32_t lastBleVbatUpdateMs = 0;
 
 static const uint32_t NFC_EFFECT_DURATION_MS = 4000UL;
 static const float NFC_EFFECT_FREQUENCY_HZ = 0.8f;
 static const int NFC_EFFECT_MIN = 5;
 static const int NFC_EFFECT_MAX = 250;
+static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
+static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
 
 static bool nfc_rc_ok(int rc)
 {
@@ -411,10 +415,19 @@ void loop()
     }
 
 #ifdef USE_BLE
-    bleSetVBat_mV(getBatteryVoltage_mV());
-    bleUpdate();
-    brightness = bleGetBrightness();
-    sensitivityF = bleGetSensitivity();
+    uint32_t nowMs = millis();
+
+    if ((uint32_t)(nowMs - lastBleCtrlUpdateMs) >= BLE_CTRL_UPDATE_PERIOD_MS) {
+      lastBleCtrlUpdateMs = nowMs;
+      bleUpdate();
+      brightness = bleGetBrightness();
+      sensitivityF = bleGetSensitivity();
+    }
+
+    if ((uint32_t)(nowMs - lastBleVbatUpdateMs) >= BLE_VBAT_UPDATE_PERIOD_MS) {
+      lastBleVbatUpdateMs = nowMs;
+      bleSetVBat_mV(getBatteryVoltage_mV());
+    }
 #endif
   }
   delay(2);
