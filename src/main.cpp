@@ -425,6 +425,17 @@ void loop()
     Serial.print("/");
     Serial.println(g_nfc_start_err);
 
+    Serial.print("[NFC] platform cnt/sd/rc clr/prio/en=");
+    Serial.print((unsigned long)g_nfc_diag.platform_setup_count);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.platform_setup_used_sd);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.platform_setup_clear_rc);
+    Serial.print("/");
+    Serial.print((unsigned long)g_nfc_diag.platform_setup_prio_rc);
+    Serial.print("/");
+    Serial.println((unsigned long)g_nfc_diag.platform_setup_enable_rc);
+
     Serial.print("[NFC] irq cnt/en/pend/prio=");
     Serial.print((unsigned long)g_nfc_diag.nfct_irq_count);
     Serial.print("/");

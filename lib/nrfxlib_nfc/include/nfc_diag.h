@@ -9,6 +9,12 @@ extern "C" {
 
 typedef struct
 {
+    volatile uint32_t platform_setup_count;
+    volatile uint32_t platform_setup_used_sd;
+    volatile uint32_t platform_setup_clear_rc;
+    volatile uint32_t platform_setup_prio_rc;
+    volatile uint32_t platform_setup_enable_rc;
+
     volatile uint32_t nfct_irq_count;
 
     volatile uint32_t t2t_event_none;

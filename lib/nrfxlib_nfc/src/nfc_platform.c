@@ -9,6 +9,7 @@
 #include "nrf.h"
 #include "nrf_sdm.h"
 #include "nrf_soc.h"
+#include "nrf_nvic.h"
 #include "nfc_diag.h"
 
 static nfc_lib_cb_resolve_t m_nfc_cb_resolve;
@@ -104,11 +105,23 @@ int nfc_platform_setup(nfc_lib_cb_resolve_t nfc_lib_cb_resolve, uint8_t * p_irq_
     *p_irq_priority = 7;
     m_hfclk_requested = false;
     nfc_diag_reset();
+    g_nfc_diag.platform_setup_count++;
 
     // Platform integration requirement: hook and enable NFCT IRQ in this runtime.
-    NVIC_ClearPendingIRQ(NFCT_IRQn);
-    NVIC_SetPriority(NFCT_IRQn, *p_irq_priority);
-    NVIC_EnableIRQ(NFCT_IRQn);
+    if (softdevice_enabled()) {
+        g_nfc_diag.platform_setup_used_sd = 1;
+        g_nfc_diag.platform_setup_clear_rc = sd_nvic_ClearPendingIRQ(NFCT_IRQn);
+        g_nfc_diag.platform_setup_prio_rc = sd_nvic_SetPriority(NFCT_IRQn, *p_irq_priority);
+        g_nfc_diag.platform_setup_enable_rc = sd_nvic_EnableIRQ(NFCT_IRQn);
+    } else {
+        g_nfc_diag.platform_setup_used_sd = 0;
+        NVIC_ClearPendingIRQ(NFCT_IRQn);
+        NVIC_SetPriority(NFCT_IRQn, *p_irq_priority);
+        NVIC_EnableIRQ(NFCT_IRQn);
+        g_nfc_diag.platform_setup_clear_rc = NRF_SUCCESS;
+        g_nfc_diag.platform_setup_prio_rc = NRF_SUCCESS;
+        g_nfc_diag.platform_setup_enable_rc = NRF_SUCCESS;
+    }
 
     return 0;
 }

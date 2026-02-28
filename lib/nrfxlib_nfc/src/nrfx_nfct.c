@@ -146,6 +146,22 @@ typedef struct
 
 static nrfx_nfct_control_block_t m_nfct_cb;
 
+/* The precompiled NFC T2T library in this project expects 0 on success. */
+static nrfx_err_t nfct_ret_compat(nrfx_err_t err_code)
+{
+    if (err_code == NRFX_SUCCESS)
+    {
+        return 0;
+    }
+
+    if (err_code >= NRFX_ERROR_BASE_NUM)
+    {
+        return (nrfx_err_t)(err_code - NRFX_ERROR_BASE_NUM);
+    }
+
+    return err_code;
+}
+
 /**
  * @brief Common part of the setup used for the NFCT initialization and reinitialization.
  */
@@ -418,7 +434,7 @@ nrfx_err_t nrfx_nfct_init(nrfx_nfct_config_t const * p_config)
 
     if (m_nfct_cb.state != NRFX_DRV_STATE_UNINITIALIZED)
     {
-        return NRFX_ERROR_INVALID_STATE;
+        return nfct_ret_compat(NRFX_ERROR_INVALID_STATE);
     }
 
     m_nfct_cb.config = *p_config;
@@ -442,14 +458,14 @@ nrfx_err_t nrfx_nfct_init(nrfx_nfct_config_t const * p_config)
     }
     else
     {
-        return err_code;
+        return nfct_ret_compat(err_code);
     }
 
     m_nfct_cb.state           = NRFX_DRV_STATE_INITIALIZED;
     m_nfct_cb.frame_delay_max = NFCT_FRAMEDELAYMAX_DEFAULT;
 
     NRFX_LOG_INFO("Initialized");
-    return err_code;
+    return nfct_ret_compat(err_code);
 }
 
 void nrfx_nfct_uninit(void)
@@ -522,7 +538,7 @@ nrfx_err_t nrfx_nfct_tx(nrfx_nfct_data_desc_t const * p_tx_data,
 
     if (p_tx_data->data_size == 0)
     {
-        return NRFX_ERROR_INVALID_LENGTH;
+        return nfct_ret_compat(NRFX_ERROR_INVALID_LENGTH);
     }
 
     nrf_nfct_rxtx_buffer_set(NRF_NFCT, (uint8_t *) p_tx_data->p_data, p_tx_data->data_size);
@@ -533,7 +549,7 @@ nrfx_err_t nrfx_nfct_tx(nrfx_nfct_data_desc_t const * p_tx_data,
     nrf_nfct_task_trigger(NRF_NFCT, NRF_NFCT_TASK_STARTTX);
 
     NRFX_LOG_INFO("Tx start");
-    return NRFX_SUCCESS;
+    return 0;
 }
 
 void nrfx_nfct_state_force(nrfx_nfct_state_t state)
@@ -592,7 +608,7 @@ nrfx_err_t nrfx_nfct_parameter_set(nrfx_nfct_param_t const * p_param)
             // Delay validation.
             if (delay > (delay_thr + NRFX_NFCT_FWT_MAX_DIFF))
             {
-                return NRFX_ERROR_INVALID_PARAM;
+                return nfct_ret_compat(NRFX_ERROR_INVALID_PARAM);
             }
 
             delay = (delay > delay_thr) ? delay_thr : delay;
@@ -603,7 +619,7 @@ nrfx_err_t nrfx_nfct_parameter_set(nrfx_nfct_param_t const * p_param)
         case NRFX_NFCT_PARAM_ID_SEL_RES:
             if (p_param->data.sel_res_protocol > NRF_NFCT_SELRES_PROTOCOL_NFCDEP_T4AT)
             {
-                return NRFX_ERROR_INVALID_PARAM;
+                return nfct_ret_compat(NRFX_ERROR_INVALID_PARAM);
             }
 
             nrf_nfct_selres_protocol_set(NRF_NFCT,
@@ -623,7 +639,7 @@ nrfx_err_t nrfx_nfct_parameter_set(nrfx_nfct_param_t const * p_param)
             break;
     }
 
-    return NRFX_SUCCESS;
+    return 0;
 }
 
 nrfx_err_t nrfx_nfct_nfcid1_default_bytes_get(uint8_t * const p_nfcid1_buff,
@@ -633,7 +649,7 @@ nrfx_err_t nrfx_nfct_nfcid1_default_bytes_get(uint8_t * const p_nfcid1_buff,
         (nfcid1_buff_len != NRFX_NFCT_NFCID1_DOUBLE_SIZE) &&
         (nfcid1_buff_len != NRFX_NFCT_NFCID1_TRIPLE_SIZE))
     {
-        return NRFX_ERROR_INVALID_LENGTH;
+        return nfct_ret_compat(NRFX_ERROR_INVALID_LENGTH);
     }
 
 #if defined(FICR_NFC_TAGHEADER0_MFGID_Msk)
@@ -673,7 +689,7 @@ nrfx_err_t nrfx_nfct_nfcid1_default_bytes_get(uint8_t * const p_nfcid1_buff,
         /* End: Bugfix for FTPAN-181 */
     }
 
-    return NRFX_SUCCESS;
+    return 0;
 }
 
 void nrfx_nfct_autocolres_enable(void)
