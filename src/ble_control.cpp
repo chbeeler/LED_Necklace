@@ -288,6 +288,8 @@ void bleInit(uint16_t initialBrightness)
 extern bool lowPowerTest;
 void bleUpdate()
 {
+  bool settings_dirty = false;
+
   // Apply pending writes latched by callbacks
   if (g_brightness_written) {
     g_brightness_written = false;
@@ -295,7 +297,7 @@ void bleUpdate()
     if (v > 4095) v = 4095;
     brightness = (uint16_t)v;
     brightnessCharacteristic.write32(brightness);
-    writeSettingsString();
+    settings_dirty = true;
   }
 
   if (g_sensitivity_written) {
@@ -304,7 +306,7 @@ void bleUpdate()
     if (raw > 4095) raw = 4095;
     sensitivityF = (float)raw * SENSITIVITY_CONV_FACTOR;
     sensitivityCharacteristic.write32(raw);
-    writeSettingsString();
+    settings_dirty = true;
   }
 
   if (g_noise_floor_written) {
@@ -313,7 +315,7 @@ void bleUpdate()
     if (raw > 1000) raw = 1000;
     noise_floor = (float)raw;
     noiseFloorCharacteristic.write32(raw);
-    writeSettingsString();
+    settings_dirty = true;
   }
 
   if (g_filter_written) {
@@ -322,7 +324,7 @@ void bleUpdate()
     if (raw > 255) raw = 255;
     filter_alpha = (float)raw / 500.0f;
     filterCharacteristic.write32(raw);
-    writeSettingsString();
+    settings_dirty = true;
   }
 
   if (g_vbatThres_written) {
@@ -343,7 +345,7 @@ void bleUpdate()
     debugCharacteristic.write8(ledMode);
     if (g_mode_u8 == MODE_POWEROFF)
       lowPowerTest = true;
-    writeSettingsString();
+    settings_dirty = true;
   }
 
   if (g_settings_written) {
@@ -376,8 +378,12 @@ void bleUpdate()
       filterCharacteristic.write32((uint32_t)a);
       debugCharacteristic.write8(ledMode);
 
-      writeSettingsString();
+      settings_dirty = true;
     }
+  }
+
+  if (settings_dirty) {
+    writeSettingsString();
   }
 }
 
@@ -390,9 +396,12 @@ float    bleGetNoiseFloor()         { return noise_floor; }
 
 void bleSetVBat_mV(uint16_t mv)
 {
+  if (mv == vbat_mV) {
+    return;
+  }
+
   vbat_mV = mv;
   vBatCharacteristic.write16(mv);
-  writeSettingsString(); // same as your TODO: not efficient, but identical behaviour
 }
 
 void bleSetVolMinMax(uint16_t min_val, uint16_t max_val)
