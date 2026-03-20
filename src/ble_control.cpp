@@ -16,6 +16,7 @@ static BLECharacteristic noiseFloorCharacteristic("19B10056-E8F2-537E-4F6C-D1047
 static BLECharacteristic filterCharacteristic("19B10100-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic settingsStrCharacteristic("19B10110-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic volMinMaxCharacteristic("19B10120-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic aeqFilterCharacteristic("19B10130-E8F2-537E-4F6C-D104768A1214");
 
 // ===================== Your config/state =====================
 #define SENSITIVITY_CONV_FACTOR   (0.0005f)
@@ -24,6 +25,7 @@ static uint16_t brightness = 100;
 static float    sensitivityF = 0.5f;
 static uint8_t  ledMode = 1;
 static float    filter_alpha = 0.15f;
+static float    aeq_filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;
 static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
@@ -32,7 +34,9 @@ static uint16_t vol_max      = 0;
 
 static const uint8_t MODE_EQ       = 1;
 static const uint8_t MODE_CONSTANT = 2;
-static const uint8_t MODE_POWEROFF = 3;
+static const uint8_t MODE_OFF      = 0;
+static const uint8_t MODE_AEQ      = 3;
+static const uint8_t MODE_POWEROFF = 9;
 static const uint8_t MODE_BOOTLOADER = 55;
 static const uint8_t DFU_MAGIC_UF2_RESET = 0x57;
 
@@ -44,6 +48,7 @@ static volatile bool g_filter_written = false;
 static volatile bool g_vbatThres_written = false;
 static volatile bool g_mode_written = false;
 static volatile bool g_settings_written = false;
+static volatile bool g_aeq_filter_written = false;
 
 static volatile uint32_t g_brightness_u32 = 0;
 static volatile uint32_t g_sensitivity_u32 = 0;
@@ -51,6 +56,7 @@ static volatile uint32_t g_noise_floor_u32 = 0;
 static volatile uint32_t g_filter_u32 = 0;
 static volatile uint32_t g_vbatThres_u32 = 0;
 static volatile uint8_t  g_mode_u8 = 0;
+static volatile uint32_t g_aeq_filter_u32 = 0;
 
 static char g_settings_buf[65]; // 64 + NUL
 
@@ -113,6 +119,11 @@ static void cb_vbatThres(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint
 {
   g_vbatThres_u32 = rd_u32_le(data, len);
   g_vbatThres_written = true;
+}
+static void cb_aeq_filter(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_aeq_filter_u32 = rd_u32_le(data, len);
+  g_aeq_filter_written = true;
 }
 static void cb_mode(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
 {
@@ -223,7 +234,7 @@ void bleInit(uint16_t initialBrightness)
   debugCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   debugCharacteristic.setFixedLen(1);
   debugCharacteristic.setWriteCallback(cb_mode);
-  debugCharacteristic.setUserDescriptor("Mode (0=Off,1=EQ,2=Constant,3=PowerOff)");
+  debugCharacteristic.setUserDescriptor("Mode (0=Off,1=EQ,2=Constant,3=AEQ,9=PowerOff)");
   debugCharacteristic.begin();
 
   // vBatThres (uint32), read/write (V*10)
@@ -257,12 +268,21 @@ void bleInit(uint16_t initialBrightness)
   volMinMaxCharacteristic.setUserDescriptor("Audio volume range (min,max)");
   volMinMaxCharacteristic.begin();
 
+  // AEQ filter (uint32), read/write (0..255)
+  aeqFilterCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  aeqFilterCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  aeqFilterCharacteristic.setFixedLen(4);
+  aeqFilterCharacteristic.setWriteCallback(cb_aeq_filter);
+  aeqFilterCharacteristic.setUserDescriptor("AEQ smoothing (0..255)");
+  aeqFilterCharacteristic.begin();
+
   // --- Initial values ---
   // NOTE: All u32 values are little-endian when written by apps/web
   brightnessCharacteristic.write32(brightness);
   sensitivityCharacteristic.write32((uint32_t)(sensitivityF / SENSITIVITY_CONV_FACTOR + 0.5f));
   noiseFloorCharacteristic.write32((uint32_t)noise_floor);
   filterCharacteristic.write32((uint32_t)(filter_alpha * 500.0f + 0.5f));
+  aeqFilterCharacteristic.write32((uint32_t)(aeq_filter_alpha * 255.0f + 0.5f));
   debugCharacteristic.write8(ledMode);
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   vBatCharacteristic.write16(vbat_mV);
@@ -333,6 +353,14 @@ void bleUpdate()
     vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   }
 
+  if (g_aeq_filter_written) {
+    g_aeq_filter_written = false;
+    uint32_t raw = g_aeq_filter_u32;
+    if (raw > 255) raw = 255;
+    aeq_filter_alpha = (float)raw / 255.0f;
+    aeqFilterCharacteristic.write32(raw);
+  }
+
   if (g_mode_written) {
     g_mode_written = false;
     if (g_mode_u8 == MODE_BOOTLOADER) {
@@ -393,6 +421,7 @@ float    bleGetVbatThres()          { return vbatThres; }
 uint8_t  getLedMode()               { return ledMode; }
 float    getFilterAlpha()           { return filter_alpha; }
 float    bleGetNoiseFloor()         { return noise_floor; }
+float    bleGetAeqFilterAlpha()     { return aeq_filter_alpha; }
 
 void bleSetVBat_mV(uint16_t mv)
 {
