@@ -294,8 +294,6 @@ void shutdownISR()
 }
 
 void setup() {
-  Serial.begin(115200);
-  
   // If low-battery reset flag was set, go directly to SYSTEMOFF.
   if (NRF_POWER->GPREGRET == 0xA7)
   {
@@ -311,12 +309,14 @@ void setup() {
         yield();
       }
     }
-
+    
     flash.end();
     sd_power_system_off();
   }
   
   batteryInit();
+
+  Serial.begin(115200);
 
   analogWriteResolution(PWM_RES_BITS);
   pinMode(LED_CHANNEL, OUTPUT);
@@ -399,8 +399,8 @@ void loop()
                              ((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2));
 
   if (shutdownIrqSeen) {
+    Serial.print("ISR");
     shutdownIrqSeen = false;
-    lowPowerTest = true;
   }
 
   if (nfcEffectTrigger) {
@@ -409,14 +409,29 @@ void loop()
     nfcEffectStartMs = millis();
   }
 
+  if(lowPowerTest)
+  {
+    pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
+
+    NRF_POWER->GPREGRET  = 0xA7;
+    __DSB(); __ISB();
+    NVIC_SystemReset();
+  }
+
   if (low_power_condition) {
     // Immediately stop LEDs
     analogWrite(LED_CHANNEL, 0);
     //analogWrite(LED_BUILTIN, pwmMax);
     digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
 
+    delay(1000);
+    Serial.write("Step 1");
+
     if(((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2)) || lowPowerTest)    //if battery is very low, completly turn off
     {
+      delay(1000);
+      Serial.write("Step 2");
+
       if(lowBattery == false)
       {
         lowBattery = true;
@@ -427,6 +442,9 @@ void loop()
         // PDM.end();
         // #endif
         // ble_sleep();
+
+        delay(1000);
+        Serial.write("Step 3");
 
         NRF_POWER->GPREGRET  = 0xA7;
         __DSB(); __ISB();
