@@ -5,9 +5,15 @@
 #include <PDM.h>
 #endif
 
+#ifndef ENABLE_NFC
+#define ENABLE_NFC 0
+#endif
+
+#if ENABLE_NFC
 extern "C" {
 #include "nfc_t2t_lib.h"
 }
+#endif
 
 #include "battery.h"
 #include "ble_control.h"
@@ -75,18 +81,23 @@ float autoNoiseFloorF = 10.0f;
 
 bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
+#if ENABLE_NFC
 volatile bool nfcEffectTrigger = false;
 bool nfcEffectActive = false;
 uint32_t nfcEffectStartMs = 0;
+#endif
 uint32_t lastBleCtrlUpdateMs = 0;
 uint32_t lastBleVbatUpdateMs = 0;
 
+#if ENABLE_NFC
 static const uint32_t NFC_EFFECT_DURATION_MS = 4000UL;
 static const float NFC_EFFECT_FREQUENCY_HZ = 0.8f;
 static const int NFC_EFFECT_MIN = 5;
 static const int NFC_EFFECT_MAX = 250;
+#endif
 static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
+#if ENABLE_NFC
 static const uint8_t NFC_URI_PREFIX = 0x04; // "https://"
 static const char NFC_URI_TEXT[] = "wa.me/41774321412?text=Hey%20Chris%2C%20cool%20necklace%21";
 
@@ -149,10 +160,13 @@ static void updateNfcEffect()
   analogWrite(LED_CHANNEL, ledValue);
 }
 
+#endif
+
 #ifdef USE_PDM
 void onPDMdata();
 #endif
 
+#if ENABLE_NFC
 static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, size_t data_length)
 {
   (void)context;
@@ -163,6 +177,7 @@ static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, si
     nfcEffectTrigger = true;
   }
 }
+#endif
 
 Adafruit_FlashTransport_QSPI flashTransport;
 Adafruit_SPIFlash flash(&flashTransport);
@@ -402,6 +417,7 @@ void setup() {
   bleInit(brightness);     // your existing global brightness
 #endif
 
+#if ENABLE_NFC
   // NFC Type 2 Tag setup
   int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
   if (nfc_rc_ok(nfc_err)) {
@@ -418,6 +434,7 @@ void setup() {
       Serial.println("NFC URI build failed");
     }
   }
+#endif
 }
 
 void loop() 
@@ -439,11 +456,13 @@ void loop()
     shutdownIrqSeen = false;
   }
 
+#if ENABLE_NFC
   if (nfcEffectTrigger) {
     nfcEffectTrigger = false;
     nfcEffectActive = true;
     nfcEffectStartMs = millis();
   }
+#endif
 
   if(lowPowerTest)
   {
@@ -495,12 +514,19 @@ void loop()
   }
   if (!low_power_condition)
   {
+#if ENABLE_NFC
     if (nfcEffectActive) {
       updateNfcEffect();
     } else if (samplesRead) {
       // Wait for samples to be read
       updateLEDs();
     }
+#else
+    if (samplesRead) {
+      // Wait for samples to be read
+      updateLEDs();
+    }
+#endif
 
 #ifdef USE_BLE
     uint32_t nowMs = millis();
