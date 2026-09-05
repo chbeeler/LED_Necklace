@@ -33,10 +33,11 @@ extern "C" {
 #define POT_PIN_LOW             D4
 #define POT_PIN_WIPER           PIN_A5
 #define POT_PIN_HIGH            D6
+#define POT_ADC_RESOLUTION_BITS  12
 #define POT_REVERSE_DIRECTION   0  // Set to 1 to reverse clockwise direction.
-#define POT_MIN_READING         0  // Measured ADC value at the low end stop.
-#define POT_MAX_READING         4095 // Measured ADC value at the high end stop.
-#define POT_HYSTERESIS          4  // Minimum controlled-value change to accept.
+#define POT_MIN_READING         20  // Measured ADC value at the low end stop.
+#define POT_MAX_READING         3700 // Measured ADC value at the high end stop.
+#define POT_HYSTERESIS          10  // Minimum calibrated ADC-count change to accept.
 #define POT_READ_PERIOD_MS      250UL
 
 extern BLEUart bleuart;   // global
@@ -100,7 +101,7 @@ uint32_t nfcEffectStartMs = 0;
 uint32_t lastBleCtrlUpdateMs = 0;
 uint32_t lastBleVbatUpdateMs = 0;
 uint32_t lastPotReadMs = 0;
-int lastPotControlledValue = -1;
+int lastPotRaw = -1;
 int lastPotMode = -1;
 
 #if ENABLE_NFC
@@ -125,7 +126,7 @@ static void updatePotentiometer(uint32_t nowMs)
   uint8_t potMode = bleGetPotMode();
   if ((int)potMode != lastPotMode) {
     lastPotMode = potMode;
-    lastPotControlledValue = -1;
+    lastPotRaw = -1;
   }
 
   if (potMode == POT_MODE_DISABLED) {
@@ -143,12 +144,21 @@ static void updatePotentiometer(uint32_t nowMs)
   pinMode(POT_PIN_WIPER, INPUT);
   delay(1); // Let the resistor divider and ADC input settle after power-up.
 
+  // Battery measurement uses the 1.8 V range; the pot needs the 3.6 V range.
+  analogReference(AR_DEFAULT);     // 
+  //analogReference(AR_INTERNAL_3_0);
+  analogReadResolution(POT_ADC_RESOLUTION_BITS);
   analogRead(POT_PIN_WIPER); // Discard the first conversion after enabling it.
+
+  //TODO: add averaging (maybe even write module/function for VBAT and POT to use)
   int rawReading = (int)analogRead(POT_PIN_WIPER);
   disablePotentiometer();
 
   if (POT_MAX_READING <= POT_MIN_READING) return;
   int raw = constrain(rawReading, POT_MIN_READING, POT_MAX_READING);
+  if (lastPotRaw >= 0 && abs(raw - lastPotRaw) < POT_HYSTERESIS) return;
+
+  lastPotRaw = raw;
   int value = (raw - POT_MIN_READING) *
               ((potMode == POT_MODE_BRIGHTNESS) ? 400 : 1000) /
               (POT_MAX_READING - POT_MIN_READING);
@@ -156,10 +166,6 @@ static void updatePotentiometer(uint32_t nowMs)
     value = ((potMode == POT_MODE_BRIGHTNESS) ? 400 : 1000) - value;
   }
 
-  if (lastPotControlledValue >= 0 &&
-      abs(value - lastPotControlledValue) < POT_HYSTERESIS) return;
-
-  lastPotControlledValue = value;
   if (potMode == POT_MODE_BRIGHTNESS) {
     bleSetBrightnessFromPot((uint16_t)value);
   } else { // POT_MODE_EQ_SENSITIVITY

@@ -16,7 +16,7 @@ const int VBAT_R1 = 1000;   // top resistor (to battery +)
 int VBAT_R2 = 490;    // bottom resistor (to GND) (510?)
 
 // ADC configuration (nRF52 core: AR_DEFAULT = 3.6V, 12-bit)
-const float ADC_REF_V       = 1.8f;
+const float ADC_REF_V       = 1.8f;   // TODO: sync with analogReference() in batteryInit()
 const int   ADC_RES_BITS    = 12;
 
 static unsigned long lastBatSampleMs = 0;
@@ -29,6 +29,11 @@ static int raw_prev2 = 0;
 
 int measureVBatPinRaw()
 {
+  // Pot sampling changes the shared ADC configuration, so restore the
+  // battery-divider range for every battery measurement.
+  analogReference(AR_INTERNAL_1_8);
+  analogReadResolution(ADC_RES_BITS);
+
   pinMode(PIN_BAT_EN, OUTPUT);
   digitalWrite(PIN_BAT_EN, LOW);
   
