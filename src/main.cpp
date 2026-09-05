@@ -28,6 +28,17 @@ extern "C" {
 #define SERIAL_OUTPUT
 #define USE_BLE
 
+// Potentiometer wiring: D4 and D6 are briefly driven as the two ends, D5 is
+// the wiper.  Keep these calibration values within the 10-bit ADC range.
+#define POT_PIN_LOW             4
+#define POT_PIN_WIPER           5
+#define POT_PIN_HIGH            6
+#define POT_REVERSE_DIRECTION   0  // Set to 1 to reverse clockwise direction.
+#define POT_MIN_READING         0  // Measured ADC value at the low end stop.
+#define POT_MAX_READING         1023 // Measured ADC value at the high end stop.
+#define POT_HYSTERESIS          4  // Minimum controlled-value change to accept.
+#define POT_READ_PERIOD_MS      250UL
+
 extern BLEUart bleuart;   // global
 
 // ---- PWM configuration ----
@@ -88,6 +99,9 @@ uint32_t nfcEffectStartMs = 0;
 #endif
 uint32_t lastBleCtrlUpdateMs = 0;
 uint32_t lastBleVbatUpdateMs = 0;
+uint32_t lastPotReadMs = 0;
+int lastPotControlledValue = -1;
+int lastPotMode = -1;
 
 #if ENABLE_NFC
 static const uint32_t NFC_EFFECT_DURATION_MS = 4000UL;
@@ -97,6 +111,68 @@ static const int NFC_EFFECT_MAX = 250;
 #endif
 static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
+
+static void disablePotentiometer()
+{
+  // Do not leave either end of the potentiometer powered between readings.
+  pinMode(POT_PIN_LOW, INPUT);
+  pinMode(POT_PIN_HIGH, INPUT);
+  pinMode(POT_PIN_WIPER, INPUT);
+}
+
+static void updatePotentiometer(uint32_t nowMs)
+{
+  uint8_t potMode = bleGetPotMode();
+  if ((int)potMode != lastPotMode) {
+    lastPotMode = potMode;
+    lastPotControlledValue = -1;
+  }
+
+  if (potMode == POT_MODE_DISABLED) {
+    disablePotentiometer();
+    return;
+  }
+
+  if ((uint32_t)(nowMs - lastPotReadMs) < POT_READ_PERIOD_MS) return;
+  lastPotReadMs = nowMs;
+
+  pinMode(POT_PIN_LOW, OUTPUT);
+  digitalWrite(POT_PIN_LOW, LOW);
+  pinMode(POT_PIN_HIGH, OUTPUT);
+  digitalWrite(POT_PIN_HIGH, HIGH);
+  pinMode(POT_PIN_WIPER, INPUT);
+  delay(1); // Let the resistor divider and ADC input settle after power-up.
+
+  analogRead(POT_PIN_WIPER); // Discard the first conversion after enabling it.
+  int rawReading = (int)analogRead(POT_PIN_WIPER);
+  disablePotentiometer();
+
+  if (POT_MAX_READING <= POT_MIN_READING) return;
+  int raw = constrain(rawReading, POT_MIN_READING, POT_MAX_READING);
+  int value = (raw - POT_MIN_READING) *
+              ((potMode == POT_MODE_BRIGHTNESS) ? 400 : 1000) /
+              (POT_MAX_READING - POT_MIN_READING);
+  if (POT_REVERSE_DIRECTION) {
+    value = ((potMode == POT_MODE_BRIGHTNESS) ? 400 : 1000) - value;
+  }
+
+  if (lastPotControlledValue >= 0 &&
+      abs(value - lastPotControlledValue) < POT_HYSTERESIS) return;
+
+  lastPotControlledValue = value;
+  if (potMode == POT_MODE_BRIGHTNESS) {
+    bleSetBrightnessFromPot((uint16_t)value);
+  } else { // POT_MODE_EQ_SENSITIVITY
+    bleSetSensitivityFromPot((uint16_t)value);
+  }
+
+  Serial.print("POT raw=");
+  Serial.print(rawReading);
+  Serial.print(" value=");
+  Serial.print(value);
+  Serial.print(" mode=");
+  Serial.println(potMode);
+}
 #if ENABLE_NFC
 static const uint8_t NFC_URI_PREFIX = 0x04; // "https://"
 static const char NFC_URI_TEXT[] = "wa.me/41774321412?text=Hey%20Chris%2C%20cool%20necklace%21";
@@ -370,6 +446,7 @@ void setup() {
   Serial.begin(115200);
 
   analogWriteResolution(PWM_RES_BITS);
+  analogReadResolution(10); // POT_MIN/MAX_READING use the 0..1023 ADC scale.
   pinMode(LED_CHANNEL, OUTPUT);
   analogWrite(LED_CHANNEL, 0);
   pinMode(LED_BUILTIN, OUTPUT);
@@ -534,6 +611,9 @@ void loop()
     if ((uint32_t)(nowMs - lastBleCtrlUpdateMs) >= BLE_CTRL_UPDATE_PERIOD_MS) {
       lastBleCtrlUpdateMs = nowMs;
       bleUpdate();
+
+      // The ends of the pot are only powered for its brief, periodic read.
+      updatePotentiometer(nowMs);
       brightness = bleGetBrightness();
       sensitivityF = bleGetSensitivity();
     }
