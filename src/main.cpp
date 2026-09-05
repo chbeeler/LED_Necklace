@@ -29,13 +29,13 @@ extern "C" {
 #define USE_BLE
 
 // Potentiometer wiring: D4 and D6 are briefly driven as the two ends, D5 is
-// the wiper.  Keep these calibration values within the 10-bit ADC range.
-#define POT_PIN_LOW             4
-#define POT_PIN_WIPER           5
-#define POT_PIN_HIGH            6
+// the wiper.  Keep these calibration values within the 12-bit ADC range.
+#define POT_PIN_LOW             D4
+#define POT_PIN_WIPER           PIN_A5
+#define POT_PIN_HIGH            D6
 #define POT_REVERSE_DIRECTION   0  // Set to 1 to reverse clockwise direction.
 #define POT_MIN_READING         0  // Measured ADC value at the low end stop.
-#define POT_MAX_READING         1023 // Measured ADC value at the high end stop.
+#define POT_MAX_READING         4095 // Measured ADC value at the high end stop.
 #define POT_HYSTERESIS          4  // Minimum controlled-value change to accept.
 #define POT_READ_PERIOD_MS      250UL
 
@@ -446,7 +446,6 @@ void setup() {
   Serial.begin(115200);
 
   analogWriteResolution(PWM_RES_BITS);
-  analogReadResolution(10); // POT_MIN/MAX_READING use the 0..1023 ADC scale.
   pinMode(LED_CHANNEL, OUTPUT);
   analogWrite(LED_CHANNEL, 0);
   pinMode(LED_BUILTIN, OUTPUT);
