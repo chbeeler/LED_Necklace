@@ -301,7 +301,7 @@ void bleInit(uint16_t initialBrightness)
   debugCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   debugCharacteristic.setFixedLen(1);
   debugCharacteristic.setWriteCallback(cb_mode);
-  debugCharacteristic.setUserDescriptor("Mode (0=Off,1=EQ,2=Constant,3=AEQ,9=PowerOff)");
+  debugCharacteristic.setUserDescriptor("Mode (0=Off,1=EQ,2=On,3=AEQ,4=Firefly,9=PowerOff)");
   debugCharacteristic.begin();
 
   // vBatThres (uint32), read/write (V*10)

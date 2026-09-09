@@ -41,8 +41,24 @@ extern "C" {
 #define POT_READ_PERIOD_MS      250UL
 #define POT_SAMPLE_COUNT        4   // Supported range: 2..4 samples per reading.
 
+// Firefly cycle timing.
+#define FIREFLY_FADE_IN_MS       350UL
+#define FIREFLY_ON_MIN_MS        500UL
+#define FIREFLY_ON_MAX_MS       2000UL
+#define FIREFLY_FADE_OUT_MS      500UL
+#define FIREFLY_PAUSE_MIN_MS    1500UL
+#define FIREFLY_PAUSE_MAX_MS    5000UL
+
 #if POT_SAMPLE_COUNT < 2 || POT_SAMPLE_COUNT > 4
 #error "POT_SAMPLE_COUNT must be between 2 and 4"
+#endif
+
+#if FIREFLY_FADE_IN_MS == 0 || FIREFLY_FADE_OUT_MS == 0
+#error "Firefly fade durations must be greater than zero"
+#endif
+
+#if FIREFLY_ON_MIN_MS > FIREFLY_ON_MAX_MS || FIREFLY_PAUSE_MIN_MS > FIREFLY_PAUSE_MAX_MS
+#error "Firefly minimum durations must not exceed their maximums"
 #endif
 
 extern BLEUart bleuart;   // global
@@ -86,6 +102,7 @@ static const uint8_t MODE_OFF      = 0;
 static const uint8_t MODE_EQ       = 1;
 static const uint8_t MODE_CONSTANT = 2;
 static const uint8_t MODE_AEQ      = 3;
+static const uint8_t MODE_FIREFLY  = 4;
 static const uint8_t MODE_POWEROFF = 9;
 
 unsigned long lastBatSampleMs = 0;
@@ -117,6 +134,81 @@ static const int NFC_EFFECT_MAX = 250;
 #endif
 static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
+
+enum FireflyPhase : uint8_t {
+  FIREFLY_FADE_IN,
+  FIREFLY_ON,
+  FIREFLY_FADE_OUT,
+  FIREFLY_PAUSE
+};
+
+static FireflyPhase fireflyPhase = FIREFLY_FADE_IN;
+static uint32_t fireflyPhaseStartMs = 0;
+static uint32_t fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
+static bool fireflyActive = false;
+
+static uint32_t randomDuration(uint32_t minMs, uint32_t maxMs)
+{
+  return (uint32_t)random((long)minMs, (long)maxMs + 1L);
+}
+
+static void startFirefly(uint32_t nowMs)
+{
+  fireflyActive = true;
+  fireflyPhase = FIREFLY_FADE_IN;
+  fireflyPhaseStartMs = nowMs;
+  fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
+}
+
+static void advanceFireflyPhase()
+{
+  fireflyPhaseStartMs += fireflyPhaseDurationMs;
+
+  switch (fireflyPhase) {
+    case FIREFLY_FADE_IN:
+      fireflyPhase = FIREFLY_ON;
+      fireflyPhaseDurationMs = randomDuration(FIREFLY_ON_MIN_MS, FIREFLY_ON_MAX_MS);
+      break;
+    case FIREFLY_ON:
+      fireflyPhase = FIREFLY_FADE_OUT;
+      fireflyPhaseDurationMs = FIREFLY_FADE_OUT_MS;
+      break;
+    case FIREFLY_FADE_OUT:
+      fireflyPhase = FIREFLY_PAUSE;
+      fireflyPhaseDurationMs = randomDuration(FIREFLY_PAUSE_MIN_MS, FIREFLY_PAUSE_MAX_MS);
+      break;
+    case FIREFLY_PAUSE:
+      fireflyPhase = FIREFLY_FADE_IN;
+      fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
+      break;
+  }
+}
+
+static void updateFirefly(uint32_t nowMs)
+{
+  if (!fireflyActive) startFirefly(nowMs);
+
+  // Normally this advances at most once. The loop also catches up cleanly if
+  // another operation temporarily delayed execution.
+  while ((uint32_t)(nowMs - fireflyPhaseStartMs) >= fireflyPhaseDurationMs) {
+    advanceFireflyPhase();
+  }
+
+  float level = 0.0f;
+  if (fireflyPhase == FIREFLY_ON) {
+    level = 1.0f;
+  } else if (fireflyPhase == FIREFLY_FADE_IN || fireflyPhase == FIREFLY_FADE_OUT) {
+    float progress = (float)(nowMs - fireflyPhaseStartMs) /
+                     (float)fireflyPhaseDurationMs;
+    // Smoothstep avoids abrupt changes at the ends of each fade.
+    level = progress * progress * (3.0f - 2.0f * progress);
+    if (fireflyPhase == FIREFLY_FADE_OUT) level = 1.0f - level;
+  }
+
+  uint32_t ledValue = (uint32_t)((float)brightness * level + 0.5f);
+  if (ledValue > pwmMax) ledValue = pwmMax;
+  analogWrite(LED_CHANNEL, (int)ledValue);
+}
 
 static void disablePotentiometer()
 {
@@ -457,6 +549,7 @@ void setup() {
   batteryInit();
 
   Serial.begin(115200);
+  randomSeed(NRF_FICR->DEVICEID[0] ^ NRF_FICR->DEVICEID[1] ^ micros());
 
   analogWriteResolution(PWM_RES_BITS);
   pinMode(LED_CHANNEL, OUTPUT);
@@ -605,17 +698,21 @@ void loop()
   {
 #if ENABLE_NFC
     if (nfcEffectActive) {
+      fireflyActive = false;
       updateNfcEffect();
-    } else if (samplesRead) {
-      // Wait for samples to be read
-      updateLEDs();
-    }
-#else
-    if (samplesRead) {
-      // Wait for samples to be read
-      updateLEDs();
-    }
+    } else
 #endif
+    {
+      if (getLedMode() == MODE_FIREFLY) {
+        updateFirefly(millis());
+      } else {
+        fireflyActive = false;
+        if (samplesRead) {
+          // Wait for samples to be read
+          updateLEDs();
+        }
+      }
+    }
 
 #ifdef USE_BLE
     uint32_t nowMs = millis();
