@@ -43,11 +43,12 @@ extern "C" {
 
 // Firefly cycle timing.
 #define FIREFLY_FADE_IN_MS       350UL
-#define FIREFLY_ON_MIN_MS        500UL
-#define FIREFLY_ON_MAX_MS       2000UL
-#define FIREFLY_FADE_OUT_MS      500UL
+#define FIREFLY_ON_MIN_MS        50UL
+#define FIREFLY_ON_MAX_MS        100UL
+#define FIREFLY_FADE_OUT_MS      900UL
 #define FIREFLY_PAUSE_MIN_MS    1500UL
 #define FIREFLY_PAUSE_MAX_MS    5000UL
+#define FIREFLY_GAMMA              2.2f
 
 #if POT_SAMPLE_COUNT < 2 || POT_SAMPLE_COUNT > 4
 #error "POT_SAMPLE_COUNT must be between 2 and 4"
@@ -184,6 +185,11 @@ static void advanceFireflyPhase()
   }
 }
 
+static float smoothstep(float x)
+{
+  return x * x * (3.0f - 2.0f * x);
+}
+
 static void updateFirefly(uint32_t nowMs)
 {
   if (!fireflyActive) startFirefly(nowMs);
@@ -200,12 +206,20 @@ static void updateFirefly(uint32_t nowMs)
   } else if (fireflyPhase == FIREFLY_FADE_IN || fireflyPhase == FIREFLY_FADE_OUT) {
     float progress = (float)(nowMs - fireflyPhaseStartMs) /
                      (float)fireflyPhaseDurationMs;
-    // Smoothstep avoids abrupt changes at the ends of each fade.
-    level = progress * progress * (3.0f - 2.0f * progress);
-    if (fireflyPhase == FIREFLY_FADE_OUT) level = 1.0f - level;
+    float eased = smoothstep(progress);
+    if (fireflyPhase == FIREFLY_FADE_IN) {
+      // Quick nonlinear rise: sqrt(smoothstep(x)).
+      level = sqrtf(eased);
+    } else {
+      // Softer nonlinear decay: 1 - smoothstep(x)^1.5.
+      level = 1.0f - powf(eased, 1.5f);
+    }
   }
 
-  uint32_t ledValue = (uint32_t)((float)brightness * level + 0.5f);
+  // Gamma-correct only the normalized envelope, then scale it so level 1.0
+  // always maps exactly to the brightness selected over BLE.
+  float pwmLevel = powf(level, FIREFLY_GAMMA);
+  uint32_t ledValue = (uint32_t)((float)brightness * pwmLevel + 0.5f);
   if (ledValue > pwmMax) ledValue = pwmMax;
   analogWrite(LED_CHANNEL, (int)ledValue);
 }
