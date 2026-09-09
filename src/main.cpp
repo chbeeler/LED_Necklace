@@ -39,6 +39,11 @@ extern "C" {
 #define POT_MAX_READING         3700 // Measured ADC value at the high end stop.
 #define POT_HYSTERESIS          10  // Minimum calibrated ADC-count change to accept.
 #define POT_READ_PERIOD_MS      250UL
+#define POT_SAMPLE_COUNT        4   // Supported range: 2..4 samples per reading.
+
+#if POT_SAMPLE_COUNT < 2 || POT_SAMPLE_COUNT > 4
+#error "POT_SAMPLE_COUNT must be between 2 and 4"
+#endif
 
 extern BLEUart bleuart;   // global
 
@@ -145,13 +150,15 @@ static void updatePotentiometer(uint32_t nowMs)
   delay(1); // Let the resistor divider and ADC input settle after power-up.
 
   // Battery measurement uses the 1.8 V range; the pot needs the 3.6 V range.
-  analogReference(AR_DEFAULT);     // 
-  //analogReference(AR_INTERNAL_3_0);
+  analogReference(AR_DEFAULT);    // 3.6V range
   analogReadResolution(POT_ADC_RESOLUTION_BITS);
   analogRead(POT_PIN_WIPER); // Discard the first conversion after enabling it.
 
-  //TODO: add averaging (maybe even write module/function for VBAT and POT to use)
-  int rawReading = (int)analogRead(POT_PIN_WIPER);
+  uint32_t rawSum = 0;
+  for (uint8_t i = 0; i < POT_SAMPLE_COUNT; ++i) {
+    rawSum += analogRead(POT_PIN_WIPER);
+  }
+  int rawReading = (int)(rawSum / POT_SAMPLE_COUNT);
   disablePotentiometer();
 
   if (POT_MAX_READING <= POT_MIN_READING) return;

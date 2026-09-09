@@ -15,8 +15,8 @@
 const int VBAT_R1 = 1000;   // top resistor (to battery +)
 int VBAT_R2 = 490;    // bottom resistor (to GND) (510?)
 
-// ADC configuration (nRF52 core: AR_DEFAULT = 3.6V, 12-bit)
-const float ADC_REF_V       = 1.8f;   // TODO: sync with analogReference() in batteryInit()
+// ADC configuration (nRF52 core: AR_INTERNAL_1_8 = 1.8 V, 12-bit)
+const float ADC_REF_V       = 1.8f;
 const int   ADC_RES_BITS    = 12;
 
 static unsigned long lastBatSampleMs = 0;

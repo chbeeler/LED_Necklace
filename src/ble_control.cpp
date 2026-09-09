@@ -1,7 +1,9 @@
 #include "ble_control.h"
 #include <Arduino.h>
+#include <InternalFileSystem.h>
 #include <nrf_soc.h>
-//#include <InternalFileSystem.h>
+
+using namespace Adafruit_LittleFS_Namespace;
 
 BLEUart bleuart;   // global
 
@@ -93,38 +95,38 @@ static bool isValidPotMode(uint8_t mode)
 
 static void loadPotMode()
 {
-  // potMode = POT_MODE_DISABLED; // Factory default, including on invalid storage.
-  // if (!InternalFS.begin()) return;
+  // Bluefruit.begin() mounts InternalFS before this function is called.
+  potMode = POT_MODE_DISABLED;
 
-  // File file(POT_MODE_SETTINGS_FILE, FILE_O_READ, InternalFS);
-  // PotModeSettings settings = {};
-  // if (file && file.read(&settings, sizeof(settings)) == sizeof(settings) &&
-  //     settings.magic == POT_MODE_SETTINGS_MAGIC &&
-  //     settings.checksum == (uint8_t)(settings.magic ^ settings.mode) &&
-  //     isValidPotMode(settings.mode)) {
-  //   potMode = settings.mode;
-  // }
-  // file.close();
-
-  potMode = POT_MODE_BRIGHTNESS;
+  File file(POT_MODE_SETTINGS_FILE, FILE_O_READ, InternalFS);
+  PotModeSettings settings = {};
+  if (file && file.read(&settings, sizeof(settings)) == sizeof(settings) &&
+      settings.magic == POT_MODE_SETTINGS_MAGIC &&
+      settings.checksum == (uint8_t)(settings.magic ^ settings.mode) &&
+      isValidPotMode(settings.mode)) {
+    potMode = settings.mode;
+  }
+  file.close();
 }
 
-static void savePotMode()
+static bool savePotMode()
 {
-  // PotModeSettings settings = {
-  //   POT_MODE_SETTINGS_MAGIC,
-  //   potMode,
-  //   (uint8_t)(POT_MODE_SETTINGS_MAGIC ^ potMode)
-  // };
+  const PotModeSettings settings = {
+    POT_MODE_SETTINGS_MAGIC,
+    potMode,
+    (uint8_t)(POT_MODE_SETTINGS_MAGIC ^ potMode)
+  };
 
-  // if (InternalFS.exists(POT_MODE_SETTINGS_FILE)) {
-  //   InternalFS.remove(POT_MODE_SETTINGS_FILE);
-  // }
-  // File file(POT_MODE_SETTINGS_FILE, FILE_O_WRITE, InternalFS);
-  // if (file) {
-  //   file.write((const uint8_t*)&settings, sizeof(settings));
-  //   file.close();
-  // }
+  // Adafruit FILE_O_WRITE opens at EOF, so overwrite the existing record and
+  // truncate any stale bytes left by an older/larger settings format.
+  File file(POT_MODE_SETTINGS_FILE, FILE_O_WRITE, InternalFS);
+  if (!file) return false;
+
+  const bool saved = file.seek(0) &&
+      file.write((const uint8_t*)&settings, sizeof(settings)) == sizeof(settings) &&
+      file.truncate();
+  file.close();
+  return saved;
 }
 
 static void writeSettingsString()
@@ -438,8 +440,12 @@ void bleUpdate()
   if (g_pot_mode_written) {
     g_pot_mode_written = false;
     if (isValidPotMode(g_pot_mode_u8)) {
-      potMode = g_pot_mode_u8;
-      savePotMode();
+      if (potMode != g_pot_mode_u8) {
+        potMode = g_pot_mode_u8;
+        if (!savePotMode()) {
+          Serial.println("Failed to persist potentiometer mode");
+        }
+      }
     }
     // Return the selected mode, or the last valid mode after an invalid write.
     potModeCharacteristic.write8(potMode);
