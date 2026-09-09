@@ -43,11 +43,20 @@ extern "C" {
 
 // Firefly cycle timing.
 #define FIREFLY_FADE_IN_MS       350UL
-#define FIREFLY_ON_MIN_MS        50UL
-#define FIREFLY_ON_MAX_MS        100UL
+#define FIREFLY_ON_MS              20UL
 #define FIREFLY_FADE_OUT_MS      900UL
-#define FIREFLY_PAUSE_MIN_MS    1500UL
-#define FIREFLY_PAUSE_MAX_MS    5000UL
+#define FIREFLY_NORMAL_PAUSE_MIN_MS       1500UL
+#define FIREFLY_NORMAL_PAUSE_MAX_MS       3500UL
+#define FIREFLY_DOUBLE_GAP_MIN_MS           350UL
+#define FIREFLY_DOUBLE_GAP_MAX_MS           700UL
+#define FIREFLY_POST_DOUBLE_PAUSE_MIN_MS   1800UL
+#define FIREFLY_POST_DOUBLE_PAUSE_MAX_MS   4000UL
+#define FIREFLY_LONG_PAUSE_MIN_MS          4000UL
+#define FIREFLY_LONG_PAUSE_MAX_MS          7000UL
+#define FIREFLY_DOUBLE_FLASH_PERCENT         20
+#define FIREFLY_LONG_PAUSE_PERCENT           10
+#define FIREFLY_SECOND_FLASH_MIN_PERCENT      60
+#define FIREFLY_SECOND_FLASH_MAX_PERCENT      85
 #define FIREFLY_GAMMA              2.2f
 
 #if POT_SAMPLE_COUNT < 2 || POT_SAMPLE_COUNT > 4
@@ -58,8 +67,20 @@ extern "C" {
 #error "Firefly fade durations must be greater than zero"
 #endif
 
-#if FIREFLY_ON_MIN_MS > FIREFLY_ON_MAX_MS || FIREFLY_PAUSE_MIN_MS > FIREFLY_PAUSE_MAX_MS
+#if FIREFLY_NORMAL_PAUSE_MIN_MS > FIREFLY_NORMAL_PAUSE_MAX_MS || \
+    FIREFLY_DOUBLE_GAP_MIN_MS > FIREFLY_DOUBLE_GAP_MAX_MS || \
+    FIREFLY_POST_DOUBLE_PAUSE_MIN_MS > FIREFLY_POST_DOUBLE_PAUSE_MAX_MS || \
+    FIREFLY_LONG_PAUSE_MIN_MS > FIREFLY_LONG_PAUSE_MAX_MS
 #error "Firefly minimum durations must not exceed their maximums"
+#endif
+
+#if FIREFLY_DOUBLE_FLASH_PERCENT + FIREFLY_LONG_PAUSE_PERCENT > 100
+#error "Firefly event probabilities must not exceed 100 percent"
+#endif
+
+#if FIREFLY_SECOND_FLASH_MIN_PERCENT > FIREFLY_SECOND_FLASH_MAX_PERCENT || \
+    FIREFLY_SECOND_FLASH_MAX_PERCENT > 100
+#error "Firefly second-flash brightness percentages are invalid"
 #endif
 
 extern BLEUart bleuart;   // global
@@ -147,6 +168,10 @@ static FireflyPhase fireflyPhase = FIREFLY_FADE_IN;
 static uint32_t fireflyPhaseStartMs = 0;
 static uint32_t fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
 static bool fireflyActive = false;
+static bool fireflyIsSecondFlash = false;
+static bool fireflyNextFlashIsSecond = false;
+static float fireflyPeakScale = 1.0f;
+static float fireflyNextPeakScale = 1.0f;
 
 static uint32_t randomDuration(uint32_t minMs, uint32_t maxMs)
 {
@@ -159,6 +184,10 @@ static void startFirefly(uint32_t nowMs)
   fireflyPhase = FIREFLY_FADE_IN;
   fireflyPhaseStartMs = nowMs;
   fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
+  fireflyIsSecondFlash = false;
+  fireflyNextFlashIsSecond = false;
+  fireflyPeakScale = 1.0f;
+  fireflyNextPeakScale = 1.0f;
 }
 
 static void advanceFireflyPhase()
@@ -168,7 +197,7 @@ static void advanceFireflyPhase()
   switch (fireflyPhase) {
     case FIREFLY_FADE_IN:
       fireflyPhase = FIREFLY_ON;
-      fireflyPhaseDurationMs = randomDuration(FIREFLY_ON_MIN_MS, FIREFLY_ON_MAX_MS);
+      fireflyPhaseDurationMs = FIREFLY_ON_MS;
       break;
     case FIREFLY_ON:
       fireflyPhase = FIREFLY_FADE_OUT;
@@ -176,11 +205,42 @@ static void advanceFireflyPhase()
       break;
     case FIREFLY_FADE_OUT:
       fireflyPhase = FIREFLY_PAUSE;
-      fireflyPhaseDurationMs = randomDuration(FIREFLY_PAUSE_MIN_MS, FIREFLY_PAUSE_MAX_MS);
+      if (fireflyIsSecondFlash) {
+        fireflyNextFlashIsSecond = false;
+        fireflyNextPeakScale = 1.0f;
+        fireflyPhaseDurationMs = randomDuration(
+            FIREFLY_POST_DOUBLE_PAUSE_MIN_MS,
+            FIREFLY_POST_DOUBLE_PAUSE_MAX_MS);
+      } else {
+        long eventRoll = random(100);
+        if (eventRoll < FIREFLY_DOUBLE_FLASH_PERCENT) {
+          fireflyNextFlashIsSecond = true;
+          fireflyNextPeakScale = (float)random(
+              FIREFLY_SECOND_FLASH_MIN_PERCENT,
+              FIREFLY_SECOND_FLASH_MAX_PERCENT + 1) / 100.0f;
+          fireflyPhaseDurationMs = randomDuration(
+              FIREFLY_DOUBLE_GAP_MIN_MS,
+              FIREFLY_DOUBLE_GAP_MAX_MS);
+        } else {
+          fireflyNextFlashIsSecond = false;
+          fireflyNextPeakScale = 1.0f;
+          if (eventRoll < FIREFLY_DOUBLE_FLASH_PERCENT + FIREFLY_LONG_PAUSE_PERCENT) {
+            fireflyPhaseDurationMs = randomDuration(
+                FIREFLY_LONG_PAUSE_MIN_MS,
+                FIREFLY_LONG_PAUSE_MAX_MS);
+          } else {
+            fireflyPhaseDurationMs = randomDuration(
+                FIREFLY_NORMAL_PAUSE_MIN_MS,
+                FIREFLY_NORMAL_PAUSE_MAX_MS);
+          }
+        }
+      }
       break;
     case FIREFLY_PAUSE:
       fireflyPhase = FIREFLY_FADE_IN;
       fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
+      fireflyIsSecondFlash = fireflyNextFlashIsSecond;
+      fireflyPeakScale = fireflyNextPeakScale;
       break;
   }
 }
@@ -219,7 +279,8 @@ static void updateFirefly(uint32_t nowMs)
   // Gamma-correct only the normalized envelope, then scale it so level 1.0
   // always maps exactly to the brightness selected over BLE.
   float pwmLevel = powf(level, FIREFLY_GAMMA);
-  uint32_t ledValue = (uint32_t)((float)brightness * pwmLevel + 0.5f);
+  uint32_t ledValue = (uint32_t)(
+      (float)brightness * fireflyPeakScale * pwmLevel + 0.5f);
   if (ledValue > pwmMax) ledValue = pwmMax;
   analogWrite(LED_CHANNEL, (int)ledValue);
 }
