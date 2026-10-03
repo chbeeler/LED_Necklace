@@ -408,10 +408,12 @@ class SerialAdcScope:
         start = max(0.0, times[-1] - window_seconds)
         first = int(np.searchsorted(times, start))
         times, raw, filtered = times[first:], raw[first:], filtered[first:]
-        raw_x, raw_y = self._decimate_envelope(times, raw)
-        filtered_x, filtered_y = self._decimate_envelope(times, filtered)
-        self.raw_line.set_data(raw_x, raw_y)
-        self.filtered_line.set_data(filtered_x, filtered_y)
+        # Pausing is the inspection mode: keep every retained display sample so
+        # toolbar zooming reveals the actual waveform instead of magnifying the
+        # live view's min/max envelope. This is a one-off redraw, so plotting up
+        # to MAX_DISPLAY_SAMPLES points here does not affect capture latency.
+        self.raw_line.set_data(times, raw)
+        self.filtered_line.set_data(times, filtered)
         self.axes.set_xlabel("Time (s)")
         self.axes.set_xlim(start, max(start + 0.001, times[-1]))
         self.live_background = None
@@ -426,12 +428,24 @@ class SerialAdcScope:
             return times, values
         bin_count = MAX_PLOT_POINTS // 2
         starts = np.linspace(0, len(values), bin_count + 1, dtype=np.int64)[:-1]
-        minimum = np.fmin.reduceat(values, starts)
-        maximum = np.fmax.reduceat(values, starts)
         next_starts = np.r_[starts[1:], len(values)]
-        midpoints = (starts + next_starts - 1) // 2
-        x = np.repeat(times[midpoints], 2)
-        y = np.column_stack((minimum, maximum)).ravel()
+        x = np.empty(bin_count * 2, dtype=np.float64)
+        y = np.empty(bin_count * 2, dtype=values.dtype)
+        for output, (start, end) in enumerate(zip(starts, next_starts)):
+            chunk = values[start:end]
+            valid = np.flatnonzero(~np.isnan(chunk))
+            if not valid.size:
+                first_index = second_index = start
+                first_value = second_value = np.nan
+            else:
+                valid_values = chunk[valid]
+                minimum_index = start + valid[int(np.argmin(valid_values))]
+                maximum_index = start + valid[int(np.argmax(valid_values))]
+                first_index, second_index = sorted((minimum_index, maximum_index))
+                first_value = values[first_index]
+                second_value = values[second_index]
+            x[output * 2 : output * 2 + 2] = times[[first_index, second_index]]
+            y[output * 2 : output * 2 + 2] = first_value, second_value
         gap_times = times[np.isnan(values)]
         if gap_times.size:
             x = np.concatenate((x, gap_times))

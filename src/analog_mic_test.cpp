@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Adafruit_TinyUSB.h>
+#include <nrf.h>
 
 // Binary analog-microphone stream:
 //   START
@@ -9,16 +10,29 @@
 // All multi-byte values are little-endian. Bytes equal to START, END or ESCAPE
 // in the frame body are emitted as ESCAPE followed by (byte XOR 0x20).
 
-static const uint8_t ANALOG_MIC_PIN = PIN_A1; // XIAO A1 = nRF52840 P0.03
-static const uint8_t ANALOG_MIC_ADC_BITS = 12;
+static const uint8_t ANALOG_MIC_PIN = PIN_A1; // XIAO A1 = nRF52840 P0.03 / AIN1
 static const uint8_t ANALOG_MIC_LP_SHIFT = 4; // alpha = 1/16
 static const uint32_t SAMPLE_RATE_HZ = 8000;
-static const uint32_t SAMPLE_PERIOD_US = 1000000UL / SAMPLE_RATE_HZ;
 static const uint8_t SAMPLES_PER_BLOCK = 128;
-// The Adafruit nRF52 core yields to FreeRTOS every time loop() returns. Capture
-// several precisely spaced samples per invocation so that scheduler cadence
-// does not limit acquisition to roughly 1 kHz.
-static const uint8_t SAMPLES_PER_LOOP_SLICE = 8;
+static const uint32_t BLOCK_DURATION_US =
+    1000000UL * SAMPLES_PER_BLOCK / SAMPLE_RATE_HZ;
+
+// The SAADC local timer runs from 16 MHz. 2000 ticks gives exactly 8 kHz.
+static const uint16_t SAADC_SAMPLE_TIMER_CC = 16000000UL / SAMPLE_RATE_HZ;
+static_assert(16000000UL % SAMPLE_RATE_HZ == 0,
+              "SAADC sample rate must divide 16 MHz exactly");
+static_assert(SAADC_SAMPLE_TIMER_CC >= 80 && SAADC_SAMPLE_TIMER_CC <= 2047,
+              "SAADC local-timer value is outside the hardware range");
+
+static const uint8_t ADC_BUFFER_COUNT = 4;
+static const uint8_t ADC_DISCARD_BUFFER = 0xFF;
+
+enum AdcBufferState : uint8_t {
+  ADC_BUFFER_FREE,
+  ADC_BUFFER_FILLING,
+  ADC_BUFFER_READY,
+  ADC_BUFFER_PROCESSING,
+};
 
 static const uint8_t FRAME_START = 0x7E;
 static const uint8_t FRAME_END = 0x7F;
@@ -35,15 +49,28 @@ struct EncodedFrame {
   size_t sent;
 };
 
+// EasyDMA writes directly into these buffers. The ISR only rotates buffers and
+// timestamps them; filtering and framing remain in the normal Arduino task.
+alignas(4) static int16_t adcBuffers[ADC_BUFFER_COUNT][SAMPLES_PER_BLOCK];
+alignas(4) static int16_t adcDiscardBuffer[SAMPLES_PER_BLOCK];
+static volatile uint8_t adcBufferState[ADC_BUFFER_COUNT];
+static volatile uint16_t adcBufferSequence[ADC_BUFFER_COUNT];
+static volatile uint32_t adcBufferTimestampUs[ADC_BUFFER_COUNT];
+static volatile uint8_t completedBufferQueue[ADC_BUFFER_COUNT];
+static volatile uint8_t completedQueueRead = 0;
+static volatile uint8_t completedQueueWrite = 0;
+static volatile uint8_t completedQueueCount = 0;
+static volatile uint8_t activeAdcBuffer = ADC_DISCARD_BUFFER;
+static volatile uint16_t nextAdcSequence = 0;
+static volatile uint32_t activeBlockTimestampUs = 0;
+static volatile uint32_t adcOverrunBlocks = 0;
+static bool adcRunning = false;
+
 static uint16_t rawSamples[SAMPLES_PER_BLOCK];
 static uint16_t filteredSamples[SAMPLES_PER_BLOCK];
-static uint8_t sampleIndex = 0;
-static uint32_t blockTimestampUs = 0;
-static uint16_t blockSequence = 0;
 static int32_t filteredQ8 = 0;
 static bool filterInitialized = false;
 static bool serialWasConnected = false;
-static uint32_t nextSampleUs = 0;
 
 static EncodedFrame txQueue[TX_QUEUE_SIZE];
 static uint8_t txReadIndex = 0;
@@ -87,18 +114,18 @@ static void appendEscaped(EncodedFrame &frame, uint8_t value)
   }
 }
 
-static void queueCompletedBlock()
+static void queueCompletedBlock(uint16_t sequence, uint32_t timestampUs)
 {
-  uint16_t sequence = blockSequence++;
   if (txQueued >= TX_QUEUE_SIZE) {
-    // The sequence still advances so the receiver can report this lost block.
+    // Sequence numbers originate in the ADC ISR, so the receiver will see a
+    // gap if USB transmission cannot keep up.
     return;
   }
 
   uint8_t body[FRAME_BODY_SIZE];
   size_t bodyLength = 0;
   appendU16Le(body, bodyLength, sequence);
-  appendU32Le(body, bodyLength, blockTimestampUs);
+  appendU32Le(body, bodyLength, timestampUs);
   body[bodyLength++] = SAMPLES_PER_BLOCK;
   for (uint8_t i = 0; i < SAMPLES_PER_BLOCK; ++i) {
     appendU16Le(body, bodyLength, rawSamples[i]);
@@ -118,25 +145,27 @@ static void queueCompletedBlock()
   ++txQueued;
 }
 
-static void captureOneSample(uint32_t scheduledTimestampUs)
+static void processAdcBlock(uint8_t bufferIndex)
 {
-  if (sampleIndex == 0) blockTimestampUs = scheduledTimestampUs;
+  for (uint8_t i = 0; i < SAMPLES_PER_BLOCK; ++i) {
+    int32_t raw = adcBuffers[bufferIndex][i];
+    if (raw < 0) raw = 0;
+    if (raw > 4095) raw = 4095;
 
-  int raw = analogRead(ANALOG_MIC_PIN);
-  int32_t targetQ8 = (int32_t)raw << 8;
-  if (!filterInitialized) {
-    filteredQ8 = targetQ8;
-    filterInitialized = true;
-  } else {
-    filteredQ8 += (targetQ8 - filteredQ8) >> ANALOG_MIC_LP_SHIFT;
+    int32_t targetQ8 = raw << 8;
+    if (!filterInitialized) {
+      filteredQ8 = targetQ8;
+      filterInitialized = true;
+    } else {
+      filteredQ8 += (targetQ8 - filteredQ8) >> ANALOG_MIC_LP_SHIFT;
+    }
+
+    rawSamples[i] = (uint16_t)raw;
+    filteredSamples[i] = (uint16_t)((filteredQ8 + 128) >> 8);
   }
 
-  rawSamples[sampleIndex] = (uint16_t)raw;
-  filteredSamples[sampleIndex] = (uint16_t)((filteredQ8 + 128) >> 8);
-  if (++sampleIndex == SAMPLES_PER_BLOCK) {
-    sampleIndex = 0;
-    queueCompletedBlock();
-  }
+  queueCompletedBlock(adcBufferSequence[bufferIndex],
+                      adcBufferTimestampUs[bufferIndex]);
 }
 
 static void serviceSerialTransmit()
@@ -156,56 +185,183 @@ static void serviceSerialTransmit()
   }
 }
 
-static void resetStream()
+static uint8_t findFreeAdcBuffer()
 {
-  sampleIndex = 0;
-  blockSequence = 0;
+  for (uint8_t i = 0; i < ADC_BUFFER_COUNT; ++i) {
+    if (adcBufferState[i] == ADC_BUFFER_FREE) return i;
+  }
+  return ADC_DISCARD_BUFFER;
+}
+
+extern "C" void SAADC_IRQHandler(void)
+{
+  if (!NRF_SAADC->EVENTS_END) return;
+  NRF_SAADC->EVENTS_END = 0;
+
+  uint8_t completed = activeAdcBuffer;
+  uint16_t completedSequence = nextAdcSequence++;
+  uint32_t completedTimestamp = activeBlockTimestampUs;
+  activeBlockTimestampUs += BLOCK_DURATION_US;
+
+  if (completed != ADC_DISCARD_BUFFER) {
+    adcBufferSequence[completed] = completedSequence;
+    adcBufferTimestampUs[completed] = completedTimestamp;
+    adcBufferState[completed] = ADC_BUFFER_READY;
+    completedBufferQueue[completedQueueWrite] = completed;
+    completedQueueWrite = (uint8_t)((completedQueueWrite + 1U) % ADC_BUFFER_COUNT);
+    ++completedQueueCount;
+  } else {
+    ++adcOverrunBlocks;
+  }
+
+  uint8_t next = findFreeAdcBuffer();
+  activeAdcBuffer = next;
+  if (next == ADC_DISCARD_BUFFER) {
+    NRF_SAADC->RESULT.PTR = (uint32_t)adcDiscardBuffer;
+  } else {
+    adcBufferState[next] = ADC_BUFFER_FILLING;
+    NRF_SAADC->RESULT.PTR = (uint32_t)adcBuffers[next];
+  }
+  NRF_SAADC->RESULT.MAXCNT = SAMPLES_PER_BLOCK;
+  NRF_SAADC->TASKS_START = 1;
+}
+
+static bool takeCompletedAdcBuffer(uint8_t &bufferIndex)
+{
+  NVIC_DisableIRQ(SAADC_IRQn);
+  if (completedQueueCount == 0) {
+    NVIC_EnableIRQ(SAADC_IRQn);
+    return false;
+  }
+
+  bufferIndex = completedBufferQueue[completedQueueRead];
+  completedQueueRead = (uint8_t)((completedQueueRead + 1U) % ADC_BUFFER_COUNT);
+  --completedQueueCount;
+  adcBufferState[bufferIndex] = ADC_BUFFER_PROCESSING;
+  NVIC_EnableIRQ(SAADC_IRQn);
+  return true;
+}
+
+static void releaseAdcBuffer(uint8_t bufferIndex)
+{
+  // A byte store is atomic on Cortex-M4. If END happens immediately before
+  // this store, the ISR may discard one block, but it cannot reuse a buffer
+  // while it is being processed.
+  adcBufferState[bufferIndex] = ADC_BUFFER_FREE;
+}
+
+static void resetStreamState()
+{
   filterInitialized = false;
+  filteredQ8 = 0;
   txReadIndex = 0;
   txWriteIndex = 0;
   txQueued = 0;
-  nextSampleUs = micros() + SAMPLE_PERIOD_US;
+
+  completedQueueRead = 0;
+  completedQueueWrite = 0;
+  completedQueueCount = 0;
+  nextAdcSequence = 0;
+  adcOverrunBlocks = 0;
+  for (uint8_t i = 0; i < ADC_BUFFER_COUNT; ++i) {
+    adcBufferState[i] = ADC_BUFFER_FREE;
+  }
+}
+
+static void startAdcSampling()
+{
+  resetStreamState();
+
+  NRF_SAADC->ENABLE = SAADC_ENABLE_ENABLE_Enabled << SAADC_ENABLE_ENABLE_Pos;
+  NRF_SAADC->RESOLUTION = SAADC_RESOLUTION_VAL_12bit;
+  NRF_SAADC->OVERSAMPLE = SAADC_OVERSAMPLE_OVERSAMPLE_Bypass;
+  NRF_SAADC->CH[0].CONFIG =
+      (SAADC_CH_CONFIG_RESP_Bypass << SAADC_CH_CONFIG_RESP_Pos) |
+      (SAADC_CH_CONFIG_RESN_Bypass << SAADC_CH_CONFIG_RESN_Pos) |
+      (SAADC_CH_CONFIG_GAIN_Gain1_6 << SAADC_CH_CONFIG_GAIN_Pos) |
+      (SAADC_CH_CONFIG_REFSEL_Internal << SAADC_CH_CONFIG_REFSEL_Pos) |
+      (SAADC_CH_CONFIG_TACQ_3us << SAADC_CH_CONFIG_TACQ_Pos) |
+      (SAADC_CH_CONFIG_MODE_SE << SAADC_CH_CONFIG_MODE_Pos) |
+      (SAADC_CH_CONFIG_BURST_Disabled << SAADC_CH_CONFIG_BURST_Pos);
+  NRF_SAADC->CH[0].PSELP = SAADC_CH_PSELP_PSELP_AnalogInput1;
+  NRF_SAADC->CH[0].PSELN = SAADC_CH_PSELN_PSELN_NC;
+  for (uint8_t channel = 1; channel < 8; ++channel) {
+    NRF_SAADC->CH[channel].PSELP = SAADC_CH_PSELP_PSELP_NC;
+    NRF_SAADC->CH[channel].PSELN = SAADC_CH_PSELN_PSELN_NC;
+  }
+
+  NRF_SAADC->SAMPLERATE =
+      (SAADC_SAMPLERATE_MODE_Timers << SAADC_SAMPLERATE_MODE_Pos) |
+      ((uint32_t)SAADC_SAMPLE_TIMER_CC << SAADC_SAMPLERATE_CC_Pos);
+
+  // Offset calibration is done once per connection before the timer starts.
+  NRF_SAADC->EVENTS_CALIBRATEDONE = 0;
+  NRF_SAADC->TASKS_CALIBRATEOFFSET = 1;
+  while (!NRF_SAADC->EVENTS_CALIBRATEDONE) {}
+  NRF_SAADC->EVENTS_CALIBRATEDONE = 0;
+
+  activeAdcBuffer = 0;
+  adcBufferState[0] = ADC_BUFFER_FILLING;
+  activeBlockTimestampUs = micros();
+  NRF_SAADC->RESULT.PTR = (uint32_t)adcBuffers[0];
+  NRF_SAADC->RESULT.MAXCNT = SAMPLES_PER_BLOCK;
+  NRF_SAADC->EVENTS_STARTED = 0;
+  NRF_SAADC->EVENTS_END = 0;
+  NRF_SAADC->INTENSET = SAADC_INTENSET_END_Set << SAADC_INTENSET_END_Pos;
+  NVIC_ClearPendingIRQ(SAADC_IRQn);
+  NVIC_SetPriority(SAADC_IRQn, 6);
+  NVIC_EnableIRQ(SAADC_IRQn);
+
+  // START only latches the EasyDMA buffer. In local-timer mode one SAMPLE
+  // task is still required to start the periodic conversions; after that the
+  // timer runs until TASKS_STOP is issued.
+  NRF_SAADC->TASKS_START = 1;
+  while (!NRF_SAADC->EVENTS_STARTED) {}
+  NRF_SAADC->EVENTS_STARTED = 0;
+  NRF_SAADC->TASKS_SAMPLE = 1;
+  adcRunning = true;
+}
+
+static void stopAdcSampling()
+{
+  if (!adcRunning) return;
+
+  NVIC_DisableIRQ(SAADC_IRQn);
+  NRF_SAADC->INTENCLR = SAADC_INTENCLR_END_Clear << SAADC_INTENCLR_END_Pos;
+  NRF_SAADC->EVENTS_STOPPED = 0;
+  NRF_SAADC->TASKS_STOP = 1;
+  while (!NRF_SAADC->EVENTS_STOPPED) {}
+  NRF_SAADC->EVENTS_STOPPED = 0;
+  NRF_SAADC->ENABLE = SAADC_ENABLE_ENABLE_Disabled << SAADC_ENABLE_ENABLE_Pos;
+  activeAdcBuffer = ADC_DISCARD_BUFFER;
+  adcRunning = false;
 }
 
 void setup()
 {
   Serial.begin(921600);
   pinMode(ANALOG_MIC_PIN, INPUT);
-  analogReference(AR_DEFAULT);
-  analogReadResolution(ANALOG_MIC_ADC_BITS);
 }
 
 void loop()
 {
   bool connected = (bool)Serial;
   if (!connected) {
+    if (serialWasConnected) stopAdcSampling();
     serialWasConnected = false;
     return;
   }
   if (!serialWasConnected) {
     serialWasConnected = true;
-    resetStream();
+    startAdcSampling();
   }
 
-  uint8_t capturedThisSlice = 0;
-  while (capturedThisSlice < SAMPLES_PER_LOOP_SLICE && Serial) {
-    // Fill any currently available USB FIFO space while waiting for the next
-    // sample instant. This call never writes more than availableForWrite().
-    serviceSerialTransmit();
+  serviceSerialTransmit();
 
-    uint32_t nowUs = micros();
-    if ((int32_t)(nowUs - nextSampleUs) < 0) continue;
-
-    captureOneSample(nowUs); // Actual time of the block's first ADC conversion.
-    ++capturedThisSlice;
-    nextSampleUs += SAMPLE_PERIOD_US;
-
-    // Do not create fake catch-up samples if USB/RTOS delayed us by more than
-    // one complete sample interval.
-    nowUs = micros();
-    if ((int32_t)(nowUs - nextSampleUs) >= (int32_t)SAMPLE_PERIOD_US) {
-      nextSampleUs = nowUs + SAMPLE_PERIOD_US;
-    }
+  uint8_t completedBuffer;
+  if (takeCompletedAdcBuffer(completedBuffer)) {
+    processAdcBlock(completedBuffer);
+    releaseAdcBuffer(completedBuffer);
   }
 
   serviceSerialTransmit();
