@@ -18,9 +18,11 @@ from typing import Protocol
 
 try:
     import numpy as np
+    import serial
     import soundcard as sc
     import sounddevice as sd
     import soundfile as sf
+    from serial.tools import list_ports
 except ImportError as exc:
     missing = getattr(exc, "name", "a required package")
     raise SystemExit(
@@ -30,6 +32,8 @@ except ImportError as exc:
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+
+from serial_adc import SerialAdcParser
 
 
 def smoothing_coefficient(seconds: float, dt: float) -> float:
@@ -139,7 +143,7 @@ ALGORITHMS: dict[str, type[BrightnessAlgorithm]] = {
 class LiveSource:
     label: str
     device_id: object
-    is_loopback: bool
+    kind: str
     sample_rate: int = 48_000
     channels: int = 2
 
@@ -195,7 +199,7 @@ class LiveAudioCapture:
                 LiveSource(
                     base + suffix,
                     index,
-                    False,
+                    "microphone",
                     int(round(float(device["default_samplerate"]))),
                     min(2, int(device["max_input_channels"])),
                 )
@@ -212,7 +216,11 @@ class LiveAudioCapture:
             base = f"System audio: {device.name}"
             used_labels[base] = used_labels.get(base, 0) + 1
             suffix = f" ({used_labels[base]})" if used_labels[base] > 1 else ""
-            result.append(LiveSource(base + suffix, device.id, True))
+            result.append(LiveSource(base + suffix, device.id, "loopback"))
+
+        for port in list_ports.comports():
+            label = f"Serial ADC: {port.device} — {port.description}"
+            result.append(LiveSource(label, port.device, "serial", 8_000, 1))
         return result
 
     @property
@@ -237,14 +245,17 @@ class LiveAudioCapture:
         if source is None:
             return
         try:
-            if not source.is_loopback:
+            if source.kind == "serial":
+                self._record_serial_adc(source)
+                return
+            if source.kind == "microphone":
                 self._record_microphone(source)
                 return
             # Retrieve a fresh object because audio devices can be reconfigured or
             # unplugged after the source list was populated.
             microphone = sc.get_microphone(
                 source.device_id,
-                include_loopback=source.is_loopback,
+                include_loopback=True,
             )
             with microphone.recorder(
                 samplerate=self.sample_rate,
@@ -266,13 +277,15 @@ class LiveAudioCapture:
                             pass
         except Exception as exc:
             hint = ""
-            if not source.is_loopback:
+            if source.kind == "microphone":
                 hint = (
                     " Check Settings > Privacy & security > Microphone and enable "
                     "microphone access for desktop apps."
                 )
-            else:
+            elif source.kind == "loopback":
                 hint = " Make sure this is the Windows output device currently playing audio."
+            else:
+                hint = " Close the serial scope or monitor if it already has this port open."
             try:
                 self.errors.put_nowait(f"Could not capture {source.label}: {exc}.{hint}")
             except queue.Full:
@@ -305,6 +318,45 @@ class LiveAudioCapture:
             callback=callback,
         ):
             self._stop.wait()
+
+    def _record_serial_adc(self, source: LiveSource) -> None:
+        parser = SerialAdcParser()
+        block: list[float] = []
+        block_times: list[float] = []
+        dc_level: float | None = None
+        with serial.Serial(str(source.device_id), 921_600, timeout=0.2) as connection:
+            connection.reset_input_buffer()
+            while not self._stop.is_set():
+                sample = parser.parse(connection.readline())
+                if sample is None:
+                    continue
+                value = float(sample.raw)
+                if dc_level is None:
+                    dc_level = value
+                # Remove the microphone module's mid-supply bias slowly. This is
+                # effectively a high-pass stage before the brightness algorithm.
+                dc_level += 0.001 * (value - dc_level)
+                block.append((value - dc_level) / 2048.0)
+                block_times.append(sample.time_s)
+                if len(block) < 256:
+                    continue
+
+                elapsed = block_times[-1] - block_times[0]
+                if elapsed > 0:
+                    measured_rate = (len(block_times) - 1) / elapsed
+                    if 100.0 <= measured_rate <= 100_000.0:
+                        self.sample_rate = int(round(measured_rate))
+                data = np.asarray(block, dtype=np.float32)
+                block.clear()
+                block_times.clear()
+                try:
+                    self.blocks.put_nowait(data)
+                except queue.Full:
+                    try:
+                        self.blocks.get_nowait()
+                        self.blocks.put_nowait(data)
+                    except queue.Empty:
+                        pass
 
     def stop(self) -> None:
         self._stop.set()
