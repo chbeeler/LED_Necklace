@@ -298,6 +298,14 @@ class SerialAdcScope:
             self.times.extend(sample_times)
             self.raw_values.extend(block.raw)
             self.filtered_values.extend(block.filtered)
+            if self.display_times:
+                gap = sample_times[0] - self.display_times[-1]
+                if gap > 1.5 / SAMPLE_RATE_HZ:
+                    # Break the plotted line across a genuine acquisition gap;
+                    # otherwise Matplotlib draws a misleading diagonal bridge.
+                    self.display_times.append(self.display_times[-1] + gap / 2.0)
+                    self.display_raw.append(float("nan"))
+                    self.display_filtered.append(float("nan"))
             self.display_times.extend(sample_times)
             self.display_raw.extend(block.raw)
             self.display_filtered.extend(block.filtered)
@@ -418,12 +426,18 @@ class SerialAdcScope:
             return times, values
         bin_count = MAX_PLOT_POINTS // 2
         starts = np.linspace(0, len(values), bin_count + 1, dtype=np.int64)[:-1]
-        minimum = np.minimum.reduceat(values, starts)
-        maximum = np.maximum.reduceat(values, starts)
+        minimum = np.fmin.reduceat(values, starts)
+        maximum = np.fmax.reduceat(values, starts)
         next_starts = np.r_[starts[1:], len(values)]
         midpoints = (starts + next_starts - 1) // 2
         x = np.repeat(times[midpoints], 2)
         y = np.column_stack((minimum, maximum)).ravel()
+        gap_times = times[np.isnan(values)]
+        if gap_times.size:
+            x = np.concatenate((x, gap_times))
+            y = np.concatenate((y, np.full(gap_times.shape, np.nan)))
+            order = np.argsort(x, kind="stable")
+            x, y = x[order], y[order]
         return x, y
 
     def close(self) -> None:

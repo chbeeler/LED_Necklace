@@ -15,6 +15,10 @@ static const uint8_t ANALOG_MIC_LP_SHIFT = 4; // alpha = 1/16
 static const uint32_t SAMPLE_RATE_HZ = 8000;
 static const uint32_t SAMPLE_PERIOD_US = 1000000UL / SAMPLE_RATE_HZ;
 static const uint8_t SAMPLES_PER_BLOCK = 128;
+// The Adafruit nRF52 core yields to FreeRTOS every time loop() returns. Capture
+// several precisely spaced samples per invocation so that scheduler cadence
+// does not limit acquisition to roughly 1 kHz.
+static const uint8_t SAMPLES_PER_LOOP_SLICE = 8;
 
 static const uint8_t FRAME_START = 0x7E;
 static const uint8_t FRAME_END = 0x7F;
@@ -183,13 +187,21 @@ void loop()
     resetStream();
   }
 
-  uint32_t nowUs = micros();
-  if ((int32_t)(nowUs - nextSampleUs) >= 0) {
-    uint32_t scheduledTimestampUs = nextSampleUs;
-    nextSampleUs += SAMPLE_PERIOD_US;
-    captureOneSample(scheduledTimestampUs);
+  uint8_t capturedThisSlice = 0;
+  while (capturedThisSlice < SAMPLES_PER_LOOP_SLICE && Serial) {
+    // Fill any currently available USB FIFO space while waiting for the next
+    // sample instant. This call never writes more than availableForWrite().
+    serviceSerialTransmit();
 
-    // Do not produce a burst of fake back-to-back samples after a long stall.
+    uint32_t nowUs = micros();
+    if ((int32_t)(nowUs - nextSampleUs) < 0) continue;
+
+    captureOneSample(nowUs); // Actual time of the block's first ADC conversion.
+    ++capturedThisSlice;
+    nextSampleUs += SAMPLE_PERIOD_US;
+
+    // Do not create fake catch-up samples if USB/RTOS delayed us by more than
+    // one complete sample interval.
     nowUs = micros();
     if ((int32_t)(nowUs - nextSampleUs) >= (int32_t)SAMPLE_PERIOD_US) {
       nextSampleUs = nowUs + SAMPLE_PERIOD_US;
