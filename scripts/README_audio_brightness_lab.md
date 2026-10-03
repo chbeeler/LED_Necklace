@@ -69,7 +69,8 @@ buttons to zoom and pan the paused trace. **Start recording** writes every
 received sample directly to CSV; **Save retained data** exports the in-memory
 history, which is capped at 500,000 samples.
 
-The firmware samples at 8 kHz and sends binary blocks of 128 samples. Each frame
+The firmware samples at 8 kHz with 14-bit resolution, a 1.2 V full-scale range,
+and 4x burst oversampling, then sends binary blocks of 128 samples. Each frame
 contains a sequence number, first-sample timestamp, one-byte sample count,
 interleaved raw/filtered 16-bit values, and a CRC-16. Reserved framing bytes are
 escaped. The scope reports lost sequence numbers, CRC errors, and framing errors

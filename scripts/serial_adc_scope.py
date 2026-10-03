@@ -28,7 +28,14 @@ from matplotlib.figure import Figure
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from serial_adc import BAUD_RATE, SAMPLE_RATE_HZ, AdcBlock, SerialAdcBlockParser
+from serial_adc import (
+    ADC_MAX_VALUE,
+    ADC_RESOLUTION_BITS,
+    BAUD_RATE,
+    SAMPLE_RATE_HZ,
+    AdcBlock,
+    SerialAdcBlockParser,
+)
 
 
 MAX_RETAINED_SAMPLES = 500_000
@@ -119,8 +126,8 @@ class SerialAdcScope:
         figure = Figure(figsize=(9, 5), dpi=100)
         self.axes = figure.add_subplot(111)
         self.axes.set_xlabel("Time (s)")
-        self.axes.set_ylabel("12-bit ADC count")
-        self.axes.set_ylim(0, 4095)
+        self.axes.set_ylabel(f"{ADC_RESOLUTION_BITS}-bit ADC count")
+        self.axes.set_ylim(0, ADC_MAX_VALUE)
         self.axes.grid(True, alpha=0.25)
         (self.raw_line,) = self.axes.plot([], [], color="#2980b9", lw=0.8, label="raw")
         (self.filtered_line,) = self.axes.plot(

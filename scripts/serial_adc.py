@@ -8,6 +8,10 @@ from dataclasses import dataclass
 
 BAUD_RATE = 921_600
 SAMPLE_RATE_HZ = 8_000
+ADC_RESOLUTION_BITS = 14
+ADC_MAX_VALUE = (1 << ADC_RESOLUTION_BITS) - 1
+ADC_HALF_SCALE = 1 << (ADC_RESOLUTION_BITS - 1)
+ADC_FULL_SCALE_VOLTS = 1.2
 FRAME_START = 0x7E
 FRAME_END = 0x7F
 FRAME_ESCAPE = 0x7D
@@ -107,7 +111,9 @@ class SerialAdcBlockParser:
         samples = struct.unpack_from(f"<{sample_count * 2}H", self._body, 7)
         raw = tuple(samples[0::2])
         filtered = tuple(samples[1::2])
-        if any(value > 4095 for value in raw) or any(value > 4095 for value in filtered):
+        if any(value > ADC_MAX_VALUE for value in raw) or any(
+            value > ADC_MAX_VALUE for value in filtered
+        ):
             self.framing_errors += 1
             return None
 

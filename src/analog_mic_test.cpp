@@ -12,6 +12,8 @@
 
 static const uint8_t ANALOG_MIC_PIN = PIN_A1; // XIAO A1 = nRF52840 P0.03 / AIN1
 static const uint8_t ANALOG_MIC_LP_SHIFT = 4; // alpha = 1/16
+static const uint8_t ANALOG_MIC_ADC_BITS = 14;
+static const int32_t ANALOG_MIC_ADC_MAX = (1L << ANALOG_MIC_ADC_BITS) - 1L;
 static const uint32_t SAMPLE_RATE_HZ = 8000;
 static const uint8_t SAMPLES_PER_BLOCK = 128;
 static const uint32_t BLOCK_DURATION_US =
@@ -150,7 +152,7 @@ static void processAdcBlock(uint8_t bufferIndex)
   for (uint8_t i = 0; i < SAMPLES_PER_BLOCK; ++i) {
     int32_t raw = adcBuffers[bufferIndex][i];
     if (raw < 0) raw = 0;
-    if (raw > 4095) raw = 4095;
+    if (raw > ANALOG_MIC_ADC_MAX) raw = ANALOG_MIC_ADC_MAX;
 
     int32_t targetQ8 = raw << 8;
     if (!filterInitialized) {
@@ -273,16 +275,19 @@ static void startAdcSampling()
   resetStreamState();
 
   NRF_SAADC->ENABLE = SAADC_ENABLE_ENABLE_Enabled << SAADC_ENABLE_ENABLE_Pos;
-  NRF_SAADC->RESOLUTION = SAADC_RESOLUTION_VAL_12bit;
-  NRF_SAADC->OVERSAMPLE = SAADC_OVERSAMPLE_OVERSAMPLE_Bypass;
+  // Internal 0.6 V reference with gain 1/2 gives a 0..1.2 V single-ended
+  // range. Four-conversion burst oversampling produces one 14-bit result at
+  // every 8 kHz timer tick.
+  NRF_SAADC->RESOLUTION = SAADC_RESOLUTION_VAL_14bit;
+  NRF_SAADC->OVERSAMPLE = SAADC_OVERSAMPLE_OVERSAMPLE_Over4x;
   NRF_SAADC->CH[0].CONFIG =
       (SAADC_CH_CONFIG_RESP_Bypass << SAADC_CH_CONFIG_RESP_Pos) |
       (SAADC_CH_CONFIG_RESN_Bypass << SAADC_CH_CONFIG_RESN_Pos) |
-      (SAADC_CH_CONFIG_GAIN_Gain1_6 << SAADC_CH_CONFIG_GAIN_Pos) |
+      (SAADC_CH_CONFIG_GAIN_Gain1_2 << SAADC_CH_CONFIG_GAIN_Pos) |
       (SAADC_CH_CONFIG_REFSEL_Internal << SAADC_CH_CONFIG_REFSEL_Pos) |
       (SAADC_CH_CONFIG_TACQ_3us << SAADC_CH_CONFIG_TACQ_Pos) |
       (SAADC_CH_CONFIG_MODE_SE << SAADC_CH_CONFIG_MODE_Pos) |
-      (SAADC_CH_CONFIG_BURST_Disabled << SAADC_CH_CONFIG_BURST_Pos);
+      (SAADC_CH_CONFIG_BURST_Enabled << SAADC_CH_CONFIG_BURST_Pos);
   NRF_SAADC->CH[0].PSELP = SAADC_CH_PSELP_PSELP_AnalogInput1;
   NRF_SAADC->CH[0].PSELN = SAADC_CH_PSELN_PSELN_NC;
   for (uint8_t channel = 1; channel < 8; ++channel) {

@@ -33,7 +33,7 @@ except ImportError as exc:
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from serial_adc import BAUD_RATE, SAMPLE_RATE_HZ, SerialAdcBlockParser
+from serial_adc import ADC_HALF_SCALE, BAUD_RATE, SAMPLE_RATE_HZ, SerialAdcBlockParser
 
 
 def smoothing_coefficient(seconds: float, dt: float) -> float:
@@ -335,7 +335,7 @@ class LiveAudioCapture:
                             dc_level = value
                         # Remove the microphone module's mid-supply bias slowly.
                         dc_level += 0.001 * (value - dc_level)
-                        normalized.append((value - dc_level) / 2048.0)
+                        normalized.append((value - dc_level) / ADC_HALF_SCALE)
                     data = np.asarray(normalized, dtype=np.float32)
                     try:
                         self.blocks.put_nowait(data)
