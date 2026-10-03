@@ -28,10 +28,9 @@ from matplotlib.figure import Figure
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from serial_adc import AdcSample, SerialAdcParser
+from serial_adc import BAUD_RATE, SAMPLE_RATE_HZ, AdcBlock, SerialAdcBlockParser
 
 
-BAUD_RATE = 921_600
 MAX_RETAINED_SAMPLES = 500_000
 MAX_DISPLAY_SAMPLES = 100_000
 MAX_PLOT_POINTS = 2_000
@@ -47,7 +46,7 @@ class SerialAdcScope:
         self.root.title("LED Necklace — Serial ADC Scope")
         self.root.minsize(900, 600)
 
-        self.samples: queue.Queue[AdcSample] = queue.Queue(maxsize=100_000)
+        self.blocks: queue.Queue[AdcBlock] = queue.Queue(maxsize=1_000)
         self.errors: queue.Queue[str] = queue.Queue(maxsize=4)
         self.stop_event = threading.Event()
         self.reader_thread: threading.Thread | None = None
@@ -70,7 +69,9 @@ class SerialAdcScope:
         self.record_path: Path | None = None
         self.recorded_rows = 0
         self.dropped_samples = 0
-        self.device_timed = False
+        self.lost_blocks = 0
+        self.crc_errors = 0
+        self.framing_errors = 0
         self.live_background = None
         self.live_window_seconds: float | None = None
         now = time.monotonic()
@@ -169,24 +170,26 @@ class SerialAdcScope:
         self.status.set(f"Connecting to {port} at {BAUD_RATE:,} baud…")
 
     def _read_serial(self, port: str) -> None:
-        parser = SerialAdcParser()
+        parser = SerialAdcBlockParser()
         try:
             with serial.Serial(port, BAUD_RATE, timeout=0.2) as connection:
                 connection.reset_input_buffer()
                 while not self.stop_event.is_set():
-                    sample = parser.parse(connection.readline())
-                    if sample is None:
-                        continue
-                    try:
-                        self.samples.put_nowait(sample)
-                    except queue.Full:
-                        # Keep recent data visible if the GUI temporarily falls behind.
+                    chunk = connection.read(connection.in_waiting or 1)
+                    for block in parser.feed(chunk):
+                        self.lost_blocks += block.lost_before
                         try:
-                            self.samples.get_nowait()
-                            self.samples.put_nowait(sample)
-                            self.dropped_samples += 1
-                        except queue.Empty:
-                            pass
+                            self.blocks.put_nowait(block)
+                        except queue.Full:
+                            # Keep recent data visible if the GUI temporarily falls behind.
+                            try:
+                                dropped = self.blocks.get_nowait()
+                                self.dropped_samples += dropped.sample_count
+                                self.blocks.put_nowait(block)
+                            except queue.Empty:
+                                pass
+                    self.crc_errors = parser.crc_errors
+                    self.framing_errors = parser.framing_errors
         except Exception as exc:
             try:
                 self.errors.put_nowait(f"Serial capture failed on {port}: {exc}")
@@ -288,20 +291,23 @@ class SerialAdcScope:
         # progressively older queued data.
         while True:
             try:
-                sample = self.samples.get_nowait()
+                block = self.blocks.get_nowait()
             except queue.Empty:
                 break
-            self.times.append(sample.time_s)
-            self.raw_values.append(sample.raw)
-            self.filtered_values.append(sample.filtered)
-            self.device_timed = sample.device_timed
-            self.display_times.append(sample.time_s)
-            self.display_raw.append(sample.raw)
-            self.display_filtered.append(sample.filtered)
+            sample_times = block.time_s + np.arange(block.sample_count) / SAMPLE_RATE_HZ
+            self.times.extend(sample_times)
+            self.raw_values.extend(block.raw)
+            self.filtered_values.extend(block.filtered)
+            self.display_times.extend(sample_times)
+            self.display_raw.extend(block.raw)
+            self.display_filtered.extend(block.filtered)
             if self.record_writer:
-                self.record_writer.writerow([f"{sample.time_s:.6f}", sample.raw, sample.filtered])
-                self.recorded_rows += 1
-            new_samples += 1
+                self.record_writer.writerows(
+                    (f"{sample_time:.6f}", raw, filtered)
+                    for sample_time, raw, filtered in zip(sample_times, block.raw, block.filtered)
+                )
+                self.recorded_rows += block.sample_count
+            new_samples += block.sample_count
 
         try:
             error = self.errors.get_nowait()
@@ -331,10 +337,15 @@ class SerialAdcScope:
                     rate = (count - 1) / elapsed
             recording = f"; recording {self.recorded_rows:,}" if self.record_file else ""
             dropped = f"; dropped {self.dropped_samples:,}" if self.dropped_samples else ""
-            timing = "device timestamps" if self.device_timed else "host arrival timestamps"
+            protocol_errors = ""
+            if self.lost_blocks or self.crc_errors or self.framing_errors:
+                protocol_errors = (
+                    f"; lost blocks {self.lost_blocks:,}; CRC errors {self.crc_errors:,}; "
+                    f"framing errors {self.framing_errors:,}"
+                )
             self.status.set(
                 f"Retained {len(self.times):,}; approximately {rate:,.0f} samples/s; "
-                f"queue {self.samples.qsize():,}; {timing}{recording}{dropped}"
+                f"queue {self.blocks.qsize():,} blocks{recording}{dropped}{protocol_errors}"
             )
             self.last_status_time = now
         self.root.after(GUI_POLL_MS, self.update)

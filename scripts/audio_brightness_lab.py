@@ -33,7 +33,7 @@ except ImportError as exc:
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from serial_adc import SerialAdcParser
+from serial_adc import BAUD_RATE, SAMPLE_RATE_HZ, SerialAdcBlockParser
 
 
 def smoothing_coefficient(seconds: float, dt: float) -> float:
@@ -220,7 +220,7 @@ class LiveAudioCapture:
 
         for port in list_ports.comports():
             label = f"Serial ADC: {port.device} — {port.description}"
-            result.append(LiveSource(label, port.device, "serial", 8_000, 1))
+            result.append(LiveSource(label, port.device, "serial", SAMPLE_RATE_HZ, 1))
         return result
 
     @property
@@ -320,43 +320,31 @@ class LiveAudioCapture:
             self._stop.wait()
 
     def _record_serial_adc(self, source: LiveSource) -> None:
-        parser = SerialAdcParser()
-        block: list[float] = []
-        block_times: list[float] = []
+        parser = SerialAdcBlockParser()
         dc_level: float | None = None
-        with serial.Serial(str(source.device_id), 921_600, timeout=0.2) as connection:
+        self.sample_rate = SAMPLE_RATE_HZ
+        with serial.Serial(str(source.device_id), BAUD_RATE, timeout=0.2) as connection:
             connection.reset_input_buffer()
             while not self._stop.is_set():
-                sample = parser.parse(connection.readline())
-                if sample is None:
-                    continue
-                value = float(sample.raw)
-                if dc_level is None:
-                    dc_level = value
-                # Remove the microphone module's mid-supply bias slowly. This is
-                # effectively a high-pass stage before the brightness algorithm.
-                dc_level += 0.001 * (value - dc_level)
-                block.append((value - dc_level) / 2048.0)
-                block_times.append(sample.time_s)
-                if len(block) < 256:
-                    continue
-
-                elapsed = block_times[-1] - block_times[0]
-                if elapsed > 0:
-                    measured_rate = (len(block_times) - 1) / elapsed
-                    if 100.0 <= measured_rate <= 100_000.0:
-                        self.sample_rate = int(round(measured_rate))
-                data = np.asarray(block, dtype=np.float32)
-                block.clear()
-                block_times.clear()
-                try:
-                    self.blocks.put_nowait(data)
-                except queue.Full:
+                chunk = connection.read(connection.in_waiting or 1)
+                for adc_block in parser.feed(chunk):
+                    normalized: list[float] = []
+                    for raw in adc_block.raw:
+                        value = float(raw)
+                        if dc_level is None:
+                            dc_level = value
+                        # Remove the microphone module's mid-supply bias slowly.
+                        dc_level += 0.001 * (value - dc_level)
+                        normalized.append((value - dc_level) / 2048.0)
+                    data = np.asarray(normalized, dtype=np.float32)
                     try:
-                        self.blocks.get_nowait()
                         self.blocks.put_nowait(data)
-                    except queue.Empty:
-                        pass
+                    except queue.Full:
+                        try:
+                            self.blocks.get_nowait()
+                            self.blocks.put_nowait(data)
+                        except queue.Empty:
+                            pass
 
     def stop(self) -> None:
         self._stop.set()
