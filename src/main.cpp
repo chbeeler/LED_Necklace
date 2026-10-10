@@ -17,6 +17,7 @@ extern "C" {
 
 #include "battery.h"
 #include "ble_control.h"
+#include "adaptive_brightness.h"
 
 #include <Adafruit_SPIFlash.h>
 #include <LSM6DS3.h>
@@ -110,16 +111,22 @@ static const char channels = 1;
 // default PCM output frequency
 static const int frequency = 16000;
 
-// Buffer to read samples into, each sample is 16-bits
-short sampleBuffer[512];
-
-// Number of audio samples read
-volatile int samplesRead = 0;
+// The PDM callback fills one buffer while the main loop processes the other.
+// The library currently supplies 512-byte blocks (256 mono int16 samples), and
+// the larger capacity leaves room if its internal block size is changed later.
+static const uint16_t AUDIO_BUFFER_SAMPLES = 512;
+static int16_t audioBuffers[2][AUDIO_BUFFER_SAMPLES];
+static volatile int8_t readyAudioBuffer = -1;
+static volatile uint16_t readyAudioSamples = 0;
+static volatile uint8_t pdmWriteBuffer = 0;
+static volatile uint32_t droppedAudioBlocks = 0;
 
 // ---- Beat / loudness detection variables ----
 
 // Low-pass filtered loudness value
 float filteredLoudness = 0.0f;
+AdaptiveBrightness adaptiveBrightness;
+static uint8_t previousAudioMode = 0xFF;
 
 // How fast the filter reacts (0..1, closer to 0 = slower, more smoothing)
 const float LP_ALPHA = 0.15f;
@@ -142,9 +149,6 @@ bool lowBattery = false;
 
 int brightness = 100;
 float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune this)
-float autoSensitivityF = 8.0f;
-float autoNoiseFloorF = 10.0f;
-
 bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
 #if ENABLE_NFC
@@ -549,22 +553,37 @@ void setupWakeUpInterrupt()
   return;
 }
 
-void updateLEDs()
+static bool takeAudioBlock(uint8_t& bufferIndex, uint16_t& sampleCount)
+{
+  noInterrupts();
+  if (readyAudioBuffer < 0) {
+    interrupts();
+    return false;
+  }
+
+  bufferIndex = (uint8_t)readyAudioBuffer;
+  sampleCount = readyAudioSamples;
+  readyAudioBuffer = -1;
+  readyAudioSamples = 0;
+  interrupts();
+  return true;
+}
+
+void updateLEDs(const int16_t* samples, uint16_t sampleCount)
 {
   // ---- Compute average absolute amplitude for this block ----
   long sumAbs = 0;
 
-  for (int i = 0; i < samplesRead; i++) {
-    int16_t s = sampleBuffer[i];
+  for (uint16_t i = 0; i < sampleCount; i++) {
+    int32_t s = samples[i];
     if (s < 0) s = -s;
     sumAbs += s;
   }
 
   float avgLoudness = 0.0f;
-  if (samplesRead > 0) {
-    avgLoudness = (float)sumAbs / (float)samplesRead;
+  if (sampleCount > 0) {
+    avgLoudness = (float)sumAbs / (float)sampleCount;
   }
-  samplesRead = 0;    // Clear the read count
 
   // ---- Low-pass filter over time (simple 1st-order IIR) ----
   // filtered = filtered + alpha * (input - filtered)
@@ -592,44 +611,26 @@ void updateLEDs()
     if (vol_window_min == 0xFFFF) vol_window_min = 0;
     bleSetVolMinMax(vol_window_min, vol_window_max);
 
-    if (ledMode == MODE_AEQ) {
-      float targetNoiseFloor = (float)vol_window_min;
-      float dynamicRange = (float)vol_window_max - (float)vol_window_min;
-      if (dynamicRange < 1.0f) dynamicRange = 1.0f;
-      float targetSensitivity = 100.0f / dynamicRange;
-
-      float aeqAlpha = bleGetAeqFilterAlpha();
-      if (aeqAlpha < 0.0f) aeqAlpha = 0.0f;
-      if (aeqAlpha > 1.0f) aeqAlpha = 1.0f;
-
-      autoNoiseFloorF += aeqAlpha * (targetNoiseFloor - autoNoiseFloorF);
-      autoSensitivityF += aeqAlpha * (targetSensitivity - autoSensitivityF);
-    }
-
     // Restart window
     vol_window_start_ms = now_ms;
     vol_window_min = 0xFFFF;
     vol_window_max = 0;
   }
 
-  float effectiveNoiseFloor = bleGetNoiseFloor();
-  float effectiveSensitivity = sensitivityF;
+  float ledValueF = 0.0f;
   if (ledMode == MODE_AEQ) {
-    effectiveNoiseFloor = autoNoiseFloorF;
-    effectiveSensitivity = autoSensitivityF;
+    // The adaptive processor normalizes signed PDM samples to -1..1, follows
+    // the ambient floor and typical peaks, and adds transient emphasis.
+    const float adaptiveOutput = adaptiveBrightness.process(
+        samples, sampleCount, (uint32_t)frequency, sensitivityF);
+    const uint16_t brightnessLimit = brightness < pwmMax ? brightness : pwmMax;
+    ledValueF = adaptiveOutput * (float)brightnessLimit;
   } else {
-    autoNoiseFloorF = effectiveNoiseFloor;
-    autoSensitivityF = effectiveSensitivity;
+    // Preserve the established MODE_EQ response and its BLE tuning controls.
+    float effectiveLoudness = filteredLoudness - bleGetNoiseFloor();
+    if (effectiveLoudness < 0.0f) effectiveLoudness = 0.0f;
+    ledValueF = effectiveLoudness * sensitivityF * ((float)brightness) / 100.0f;
   }
-
-  // ---- Apply noise floor ----
-  float effectiveLoudness = filteredLoudness - effectiveNoiseFloor;
-  if (effectiveLoudness < 0.0f) {
-    effectiveLoudness = 0.0f;
-  }
-
-  // ---- Map loudness to LED brightness ----
-  float ledValueF = effectiveLoudness * effectiveSensitivity * ((float)brightness)/100.0f;
 
   if (ledValueF > (float)pwmMax)
     ledValueF = (float)pwmMax;
@@ -855,6 +856,15 @@ void loop()
   }
   if (!low_power_condition)
   {
+    uint8_t audioBufferIndex = 0;
+    uint16_t audioSampleCount = 0;
+    const bool audioBlockReady = takeAudioBlock(audioBufferIndex, audioSampleCount);
+    const uint8_t activeLedMode = getLedMode();
+    if (activeLedMode != previousAudioMode) {
+      if (activeLedMode == MODE_AEQ) adaptiveBrightness.reset();
+      previousAudioMode = activeLedMode;
+    }
+
 #if ENABLE_NFC
     if (nfcEffectActive) {
       fireflyActive = false;
@@ -862,13 +872,12 @@ void loop()
     } else
 #endif
     {
-      if (getLedMode() == MODE_FIREFLY) {
+      if (activeLedMode == MODE_FIREFLY) {
         updateFirefly(millis());
       } else {
         fireflyActive = false;
-        if (samplesRead) {
-          // Wait for samples to be read
-          updateLEDs();
+        if (audioBlockReady) {
+          updateLEDs(audioBuffers[audioBufferIndex], audioSampleCount);
         }
       }
     }
@@ -905,11 +914,23 @@ void loop()
 void onPDMdata() {
   // Query the number of available bytes
   int bytesAvailable = PDM.available();
-  
-  // Read into the sample buffer
-  PDM.read(sampleBuffer, bytesAvailable);
-  
-  // 16-bit, 2 bytes per sample
-  samplesRead = bytesAvailable / 2;
+  if (bytesAvailable <= 0) return;
+
+  const uint8_t destination = pdmWriteBuffer;
+  const int bufferBytes = (int)sizeof(audioBuffers[destination]);
+  if (bytesAvailable > bufferBytes) bytesAvailable = bufferBytes;
+
+  const int bytesRead = PDM.read(audioBuffers[destination], (size_t)bytesAvailable);
+  if (bytesRead <= 0) return;
+
+  // Publish only complete, stable buffers. If the main loop still owns the
+  // previous block, retain that block and count this new one as dropped.
+  if (readyAudioBuffer < 0) {
+    readyAudioSamples = (uint16_t)(bytesRead / (int)sizeof(int16_t));
+    readyAudioBuffer = (int8_t)destination;
+    pdmWriteBuffer = destination ^ 1U;
+  } else {
+    ++droppedAudioBlocks;
+  }
 }
 #endif
