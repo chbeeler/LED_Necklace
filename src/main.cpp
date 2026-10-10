@@ -41,6 +41,16 @@ extern "C" {
 #define POT_READ_PERIOD_MS      250UL
 #define POT_SAMPLE_COUNT        4   // Supported range: 2..4 samples per reading.
 
+// Each button is wired between two GPIO pins.  Drive one side HIGH and use a
+// pull-down on the other side, so a closed button reads HIGH.  Button 2 shares
+// D6 with the potentiometer; using D1 as the HIGH side avoids opposing outputs
+// while D6 is briefly driven HIGH for a potentiometer reading.
+#define BUTTON_1_DRIVE_PIN      D7
+#define BUTTON_1_SENSE_PIN      D10
+#define BUTTON_2_DRIVE_PIN      D1
+#define BUTTON_2_SENSE_PIN      D6
+#define BUTTON_DEBOUNCE_MS      25UL
+
 // Firefly cycle timing.
 #define FIREFLY_FADE_IN_MS       350UL
 #define FIREFLY_ON_MS              20UL
@@ -147,6 +157,16 @@ uint32_t lastBleVbatUpdateMs = 0;
 uint32_t lastPotReadMs = 0;
 int lastPotRaw = -1;
 int lastPotMode = -1;
+
+struct ButtonState {
+  bool rawPressed;
+  bool stablePressed;
+  uint32_t rawChangedMs;
+};
+
+static ButtonState button1State = {false, false, 0};
+static ButtonState button2State = {false, false, 0};
+static bool bothButtonsPressed = false;
 
 #if ENABLE_NFC
 static const uint32_t NFC_EFFECT_DURATION_MS = 4000UL;
@@ -352,6 +372,62 @@ static void updatePotentiometer(uint32_t nowMs)
   Serial.print(value);
   Serial.print(" mode=");
   Serial.println(potMode);
+}
+
+static void setupButtons()
+{
+  // Set the output latch before enabling output mode to avoid a LOW glitch.
+  digitalWrite(BUTTON_1_DRIVE_PIN, HIGH);
+  pinMode(BUTTON_1_DRIVE_PIN, OUTPUT);
+  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN);
+
+  digitalWrite(BUTTON_2_DRIVE_PIN, HIGH);
+  pinMode(BUTTON_2_DRIVE_PIN, OUTPUT);
+  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN);
+}
+
+static void updateButton(ButtonState &state,
+                         bool rawPressed,
+                         uint32_t nowMs,
+                         const char *name)
+{
+  if (rawPressed != state.rawPressed) {
+    state.rawPressed = rawPressed;
+    state.rawChangedMs = nowMs;
+  }
+
+  if (state.stablePressed != state.rawPressed &&
+      (uint32_t)(nowMs - state.rawChangedMs) >= BUTTON_DEBOUNCE_MS) {
+    state.stablePressed = state.rawPressed;
+    if (state.stablePressed) {
+      Serial.print(name);
+      Serial.println(" pressed");
+    }
+  }
+}
+
+static void updateButtons(uint32_t nowMs)
+{
+  // The potentiometer code changes D6's mode, so restore its button sense
+  // configuration immediately before every button sample.
+  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN);
+  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN);
+
+  updateButton(button1State,
+               digitalRead(BUTTON_1_SENSE_PIN) == HIGH,
+               nowMs,
+               "Button 1 (D7-D10)");
+  updateButton(button2State,
+               digitalRead(BUTTON_2_SENSE_PIN) == HIGH,
+               nowMs,
+               "Button 2 (D6-D1)");
+
+  bool bothPressedNow = button1State.stablePressed &&
+                        button2State.stablePressed;
+  if (bothPressedNow && !bothButtonsPressed) {
+    Serial.println("WARNING: both buttons are pressed at the same time");
+  }
+  bothButtonsPressed = bothPressedNow;
 }
 #if ENABLE_NFC
 static const uint8_t NFC_URI_PREFIX = 0x04; // "https://"
@@ -624,6 +700,7 @@ void setup() {
   batteryInit();
 
   Serial.begin(115200);
+  setupButtons();
   randomSeed(NRF_FICR->DEVICEID[0] ^ NRF_FICR->DEVICEID[1] ^ micros());
 
   analogWriteResolution(PWM_RES_BITS);
@@ -807,6 +884,7 @@ void loop()
       bleSetVBat_mV(getBatteryVoltage_mV());
     }
 #endif
+    updateButtons(millis());
   }
   delay(2);
 }
