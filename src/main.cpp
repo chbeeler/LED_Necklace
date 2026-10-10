@@ -677,24 +677,28 @@ void shutdownISR()
 }
 
 void setup() {
-  // If low-battery reset flag was set, go directly to SYSTEMOFF.
+  // If a low-battery reset was requested, enter SYSTEMOFF only when USB is
+  // still absent.  Connecting USB must always allow the device to boot, even
+  // when no battery is installed or a previous boot set the reset marker.
   if (NRF_POWER->GPREGRET == 0xA7)
   {
     NRF_POWER->GPREGRET = 0;
 
-    flash.begin();
-    Bluefruit.begin();
+    if (!vbusConnected()) {
+      flash.begin();
+      Bluefruit.begin();
 
-    if (!deepPowerDown(flash, flashTransport)) {
-      pinMode(LED_BUILTIN, OUTPUT);
-      digitalWrite(LED_BUILTIN, LOW);
-      while (1) {
-        yield();
+      if (!deepPowerDown(flash, flashTransport)) {
+        pinMode(LED_BUILTIN, OUTPUT);
+        digitalWrite(LED_BUILTIN, LOW);
+        while (1) {
+          yield();
+        }
       }
+
+      flash.end();
+      sd_power_system_off();
     }
-    
-    flash.end();
-    sd_power_system_off();
   }
   
   batteryInit();
@@ -781,9 +785,10 @@ void loop()
   }
 
   batteryUpdate(bleGetVbatThres());
-  bool low_power_condition = ((batteryIsLow() == true) && (vbusConnected() == false)) ||
-                             lowPowerTest ||
-                             ((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2));
+  bool usbPowered = vbusConnected();
+  float batteryVoltage = getBatteryVoltage();
+  bool batteryVoltageCritical = batteryVoltage < 3.73f && batteryVoltage > 0.2f;
+  bool low_power_condition = lowPowerTest || (!usbPowered && (batteryIsLow() || batteryVoltageCritical));
 
   if (shutdownIrqSeen) {
     Serial.print("ISR");
@@ -816,7 +821,9 @@ void loop()
     delay(1000);
     Serial.write("Step 1");
 
-    if(((getBatteryVoltage() < 3.73f) && (getBatteryVoltage() > 0.2)) || lowPowerTest)    //if battery is very low, completly turn off
+    // Explicit test shutdown still works on USB. Automatic battery shutdown
+    // is allowed only while USB power is absent.
+    if ((!usbPowered && batteryVoltageCritical) || lowPowerTest)
     {
       delay(1000);
       Serial.write("Step 2");

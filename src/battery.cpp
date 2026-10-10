@@ -9,7 +9,6 @@
 #define VBAT_ENABLE   P0_14
 #endif
 #define PIN_BAT_EN   VBAT_ENABLE   // P0.14, enables divider when LOW
-#define PIN_nCHARGING   (17)
 
 // Divider values: 1M (top) and 510k (bottom)
 const int VBAT_R1 = 1000;   // top resistor (to battery +)
@@ -69,7 +68,9 @@ void batteryInit()
 
 bool vbusConnected()
 {
-  return !digitalRead(PIN_nCHARGING);
+  // USBREGSTATUS reports actual voltage on VBUS.  The charger's nCHARGING
+  // output is not a reliable VBUS indicator when no battery is installed.
+  return (NRF_POWER->USBREGSTATUS & POWER_USBREGSTATUS_VBUSDETECT_Msk) != 0;
 }
 
 const float adcMax = (1 << ADC_RES_BITS) - 1;
