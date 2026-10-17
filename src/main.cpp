@@ -100,7 +100,22 @@ extern BLEUart bleuart;   // global
 const uint8_t PWM_RES_BITS = 12;    // 12-bit: 0..4095 (nRF52840 HW can do up to 15 bits)
 uint16_t pwmMax = (1 << PWM_RES_BITS) - 1;
 
-#define LED_CHANNEL 3
+#define LED_CHANNEL          D3  // Existing necklace PCB connection.
+#define LED_CHANNEL_DUPLICATE D0 // Easier-to-solder connection for new PCBs.
+
+static void writeLedPwm(uint32_t value)
+{
+  // Both pins are channels of the same hardware PWM peripheral, so they carry
+  // the same waveform while retaining compatibility with the original pinout.
+  analogWrite(LED_CHANNEL, value);
+  analogWrite(LED_CHANNEL_DUPLICATE, value);
+}
+
+static void setLedPinMode(uint8_t mode)
+{
+  pinMode(LED_CHANNEL, mode);
+  pinMode(LED_CHANNEL_DUPLICATE, mode);
+}
 
 typedef enum {charge_current_50, charge_current_100} charge_current_setting_t;
 charge_current_setting_t chargeCurrentSelection = charge_current_50;
@@ -306,7 +321,7 @@ static void updateFirefly(uint32_t nowMs)
   uint32_t ledValue = (uint32_t)(
       (float)brightness * fireflyPeakScale * pwmLevel + 0.5f);
   if (ledValue > pwmMax) ledValue = pwmMax;
-  analogWrite(LED_CHANNEL, (int)ledValue);
+  writeLedPwm(ledValue);
 }
 
 static void disablePotentiometer()
@@ -493,7 +508,7 @@ static void updateNfcEffect()
     ledValue = pwmMax;
   }
 
-  analogWrite(LED_CHANNEL, ledValue);
+  writeLedPwm(ledValue);
 }
 
 #endif
@@ -651,7 +666,7 @@ void updateLEDs(const int16_t* samples, uint16_t sampleCount)
 
   unsigned long t = millis();
   if(t > 500UL){
-    analogWrite(LED_CHANNEL, ledValue);
+    writeLedPwm(ledValue);
   }
   //analogWrite(LED_BUILTIN, pwmMax-ledValue);
   
@@ -709,8 +724,8 @@ void setup() {
   randomSeed(NRF_FICR->DEVICEID[0] ^ NRF_FICR->DEVICEID[1] ^ micros());
 
   analogWriteResolution(PWM_RES_BITS);
-  pinMode(LED_CHANNEL, OUTPUT);
-  analogWrite(LED_CHANNEL, 0);
+  setLedPinMode(OUTPUT);
+  writeLedPwm(0);
   pinMode(LED_BUILTIN, OUTPUT);
 
 #ifdef USE_PDM
@@ -806,7 +821,7 @@ void loop()
 
   if(lowPowerTest)
   {
-    pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
+    setLedPinMode(INPUT_PULLDOWN);
 
     NRF_POWER->GPREGRET  = 0xA7;
     __DSB(); __ISB();
@@ -815,7 +830,7 @@ void loop()
 
   if (low_power_condition) {
     // Immediately stop LEDs
-    analogWrite(LED_CHANNEL, 0);
+    writeLedPwm(0);
     //analogWrite(LED_BUILTIN, pwmMax);
     digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
 
@@ -833,7 +848,7 @@ void loop()
       {
         lowBattery = true;
                 
-        pinMode(LED_CHANNEL, INPUT_PULLDOWN);  //analogWrite(LED_CHANNEL, 0); 
+        setLedPinMode(INPUT_PULLDOWN);
         // pinMode(LED_BUILTIN, INPUT);   // off
         // #ifdef USE_PDM
         // PDM.end();
