@@ -28,8 +28,6 @@ static int raw_prev2 = 0;
 
 int measureVBatPinRaw()
 {
-  // Pot sampling changes the shared ADC configuration, so restore the
-  // battery-divider range for every battery measurement.
   analogReference(AR_INTERNAL_1_8);
   analogReadResolution(ADC_RES_BITS);
 

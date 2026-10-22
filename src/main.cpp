@@ -29,26 +29,11 @@ extern "C" {
 #define SERIAL_OUTPUT
 #define USE_BLE
 
-// Potentiometer wiring: D4 and D6 are briefly driven as the two ends, D5 is
-// the wiper.  Keep these calibration values within the 12-bit ADC range.
-#define POT_PIN_LOW             D4
-#define POT_PIN_WIPER           PIN_A5
-#define POT_PIN_HIGH            D6
-#define POT_ADC_RESOLUTION_BITS  12
-#define POT_REVERSE_DIRECTION   0  // Set to 1 to reverse clockwise direction.
-#define POT_MIN_READING         20  // Measured ADC value at the low end stop.
-#define POT_MAX_READING         3700 // Measured ADC value at the high end stop.
-#define POT_HYSTERESIS          10  // Minimum calibrated ADC-count change to accept.
-#define POT_READ_PERIOD_MS      250UL
-#define POT_SAMPLE_COUNT        4   // Supported range: 2..4 samples per reading.
-
 // Each button is wired between two GPIO pins.  Drive one side HIGH and use a
-// pull-down on the other side, so a closed button reads HIGH.  Button 2 shares
-// D6 with the potentiometer; using D1 as the HIGH side avoids opposing outputs
-// while D6 is briefly driven HIGH for a potentiometer reading.
+// pull-down on the other side, so a closed button reads HIGH.
 #define BUTTON_1_DRIVE_PIN      D7
-#define BUTTON_1_SENSE_PIN      D10
-#define BUTTON_2_DRIVE_PIN      D1
+#define BUTTON_1_SENSE_PIN      D9
+#define BUTTON_2_DRIVE_PIN      D4
 #define BUTTON_2_SENSE_PIN      D6
 #define BUTTON_DEBOUNCE_MS      25UL
 
@@ -69,10 +54,6 @@ extern "C" {
 #define FIREFLY_SECOND_FLASH_MIN_PERCENT      60
 #define FIREFLY_SECOND_FLASH_MAX_PERCENT      85
 #define FIREFLY_GAMMA              2.2f
-
-#if POT_SAMPLE_COUNT < 2 || POT_SAMPLE_COUNT > 4
-#error "POT_SAMPLE_COUNT must be between 2 and 4"
-#endif
 
 #if FIREFLY_FADE_IN_MS == 0 || FIREFLY_FADE_OUT_MS == 0
 #error "Firefly fade durations must be greater than zero"
@@ -173,9 +154,6 @@ uint32_t nfcEffectStartMs = 0;
 #endif
 uint32_t lastBleCtrlUpdateMs = 0;
 uint32_t lastBleVbatUpdateMs = 0;
-uint32_t lastPotReadMs = 0;
-int lastPotRaw = -1;
-int lastPotMode = -1;
 
 struct ButtonState {
   bool rawPressed;
@@ -324,75 +302,6 @@ static void updateFirefly(uint32_t nowMs)
   writeLedPwm(ledValue);
 }
 
-static void disablePotentiometer()
-{
-  // Do not leave either end of the potentiometer powered between readings.
-  pinMode(POT_PIN_LOW, INPUT);
-  pinMode(POT_PIN_HIGH, INPUT);
-  pinMode(POT_PIN_WIPER, INPUT);
-}
-
-static void updatePotentiometer(uint32_t nowMs)
-{
-  uint8_t potMode = bleGetPotMode();
-  if ((int)potMode != lastPotMode) {
-    lastPotMode = potMode;
-    lastPotRaw = -1;
-  }
-
-  if (potMode == POT_MODE_DISABLED) {
-    disablePotentiometer();
-    return;
-  }
-
-  if ((uint32_t)(nowMs - lastPotReadMs) < POT_READ_PERIOD_MS) return;
-  lastPotReadMs = nowMs;
-
-  pinMode(POT_PIN_LOW, OUTPUT);
-  digitalWrite(POT_PIN_LOW, LOW);
-  pinMode(POT_PIN_HIGH, OUTPUT);
-  digitalWrite(POT_PIN_HIGH, HIGH);
-  pinMode(POT_PIN_WIPER, INPUT);
-  delay(1); // Let the resistor divider and ADC input settle after power-up.
-
-  // Battery measurement uses the 1.8 V range; the pot needs the 3.6 V range.
-  analogReference(AR_DEFAULT);    // 3.6V range
-  analogReadResolution(POT_ADC_RESOLUTION_BITS);
-  analogRead(POT_PIN_WIPER); // Discard the first conversion after enabling it.
-
-  uint32_t rawSum = 0;
-  for (uint8_t i = 0; i < POT_SAMPLE_COUNT; ++i) {
-    rawSum += analogRead(POT_PIN_WIPER);
-  }
-  int rawReading = (int)(rawSum / POT_SAMPLE_COUNT);
-  disablePotentiometer();
-
-  if (POT_MAX_READING <= POT_MIN_READING) return;
-  int raw = constrain(rawReading, POT_MIN_READING, POT_MAX_READING);
-  if (lastPotRaw >= 0 && abs(raw - lastPotRaw) < POT_HYSTERESIS) return;
-
-  lastPotRaw = raw;
-  int value = (raw - POT_MIN_READING) *
-              ((potMode == POT_MODE_BRIGHTNESS) ? 400 : 1000) /
-              (POT_MAX_READING - POT_MIN_READING);
-  if (POT_REVERSE_DIRECTION) {
-    value = ((potMode == POT_MODE_BRIGHTNESS) ? 400 : 1000) - value;
-  }
-
-  if (potMode == POT_MODE_BRIGHTNESS) {
-    bleSetBrightnessFromPot((uint16_t)value);
-  } else { // POT_MODE_EQ_SENSITIVITY
-    bleSetSensitivityFromPot((uint16_t)value);
-  }
-
-  Serial.print("POT raw=");
-  Serial.print(rawReading);
-  Serial.print(" value=");
-  Serial.print(value);
-  Serial.print(" mode=");
-  Serial.println(potMode);
-}
-
 static void setupButtons()
 {
   // Set the output latch before enabling output mode to avoid a LOW glitch.
@@ -427,19 +336,14 @@ static void updateButton(ButtonState &state,
 
 static void updateButtons(uint32_t nowMs)
 {
-  // The potentiometer code changes D6's mode, so restore its button sense
-  // configuration immediately before every button sample.
-  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN);
-  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN);
-
   updateButton(button1State,
                digitalRead(BUTTON_1_SENSE_PIN) == HIGH,
                nowMs,
-               "Button 1 (D7-D10)");
+               "Button 1 (D7-D9)");
   updateButton(button2State,
                digitalRead(BUTTON_2_SENSE_PIN) == HIGH,
                nowMs,
-               "Button 2 (D6-D1)");
+               "Button 2 (D4-D6)");
 
   bool bothPressedNow = button1State.stablePressed &&
                         button2State.stablePressed;
@@ -904,8 +808,6 @@ void loop()
       lastBleCtrlUpdateMs = nowMs;
       bleUpdate();
 
-      // The ends of the pot are only powered for its brief, periodic read.
-      updatePotentiometer(nowMs);
       brightness = bleGetBrightness();
       sensitivityF = bleGetSensitivity();
     }

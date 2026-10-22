@@ -1,9 +1,6 @@
 #include "ble_control.h"
 #include <Arduino.h>
-#include <InternalFileSystem.h>
 #include <nrf_soc.h>
-
-using namespace Adafruit_LittleFS_Namespace;
 
 BLEUart bleuart;   // global
 
@@ -20,7 +17,6 @@ static BLECharacteristic filterCharacteristic("19B10100-E8F2-537E-4F6C-D104768A1
 static BLECharacteristic settingsStrCharacteristic("19B10110-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic volMinMaxCharacteristic("19B10120-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic aeqFilterCharacteristic("19B10130-E8F2-537E-4F6C-D104768A1214");
-static BLECharacteristic potModeCharacteristic("19B10140-E8F2-537E-4F6C-D104768A1214");
 
 // ===================== Your config/state =====================
 #define SENSITIVITY_CONV_FACTOR   (0.0005f)
@@ -35,7 +31,6 @@ static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
 static uint16_t vol_min      = 0;
 static uint16_t vol_max      = 0;
-static uint8_t  potMode      = POT_MODE_DISABLED;
 
 static const uint8_t MODE_EQ       = 1;
 static const uint8_t MODE_CONSTANT = 2;
@@ -54,7 +49,6 @@ static volatile bool g_vbatThres_written = false;
 static volatile bool g_mode_written = false;
 static volatile bool g_settings_written = false;
 static volatile bool g_aeq_filter_written = false;
-static volatile bool g_pot_mode_written = false;
 
 static volatile uint32_t g_brightness_u32 = 0;
 static volatile uint32_t g_sensitivity_u32 = 0;
@@ -63,18 +57,8 @@ static volatile uint32_t g_filter_u32 = 0;
 static volatile uint32_t g_vbatThres_u32 = 0;
 static volatile uint8_t  g_mode_u8 = 0;
 static volatile uint32_t g_aeq_filter_u32 = 0;
-static volatile uint8_t  g_pot_mode_u8 = POT_MODE_DISABLED;
 
 static char g_settings_buf[65]; // 64 + NUL
-
-static const char POT_MODE_SETTINGS_FILE[] = "/pot_mode.bin";
-static const uint8_t POT_MODE_SETTINGS_MAGIC = 0xA5;
-
-struct PotModeSettings {
-  uint8_t magic;
-  uint8_t mode;
-  uint8_t checksum;
-};
 
 // ===================== helpers =====================
 static uint32_t rd_u32_le(const uint8_t* d, uint16_t len)
@@ -84,49 +68,6 @@ static uint32_t rd_u32_le(const uint8_t* d, uint16_t len)
          ((uint32_t)d[1] << 8) |
          ((uint32_t)d[2] << 16) |
          ((uint32_t)d[3] << 24);
-}
-
-static bool isValidPotMode(uint8_t mode)
-{
-  return mode == POT_MODE_DISABLED ||
-         mode == POT_MODE_BRIGHTNESS ||
-         mode == POT_MODE_EQ_SENSITIVITY;
-}
-
-static void loadPotMode()
-{
-  // Bluefruit.begin() mounts InternalFS before this function is called.
-  potMode = POT_MODE_DISABLED;
-
-  File file(POT_MODE_SETTINGS_FILE, FILE_O_READ, InternalFS);
-  PotModeSettings settings = {};
-  if (file && file.read(&settings, sizeof(settings)) == sizeof(settings) &&
-      settings.magic == POT_MODE_SETTINGS_MAGIC &&
-      settings.checksum == (uint8_t)(settings.magic ^ settings.mode) &&
-      isValidPotMode(settings.mode)) {
-    potMode = settings.mode;
-  }
-  file.close();
-}
-
-static bool savePotMode()
-{
-  const PotModeSettings settings = {
-    POT_MODE_SETTINGS_MAGIC,
-    potMode,
-    (uint8_t)(POT_MODE_SETTINGS_MAGIC ^ potMode)
-  };
-
-  // Adafruit FILE_O_WRITE opens at EOF, so overwrite the existing record and
-  // truncate any stale bytes left by an older/larger settings format.
-  File file(POT_MODE_SETTINGS_FILE, FILE_O_WRITE, InternalFS);
-  if (!file) return false;
-
-  const bool saved = file.seek(0) &&
-      file.write((const uint8_t*)&settings, sizeof(settings)) == sizeof(settings) &&
-      file.truncate();
-  file.close();
-  return saved;
 }
 
 static void writeSettingsString()
@@ -184,13 +125,6 @@ static void cb_aeq_filter(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uin
   g_aeq_filter_u32 = rd_u32_le(data, len);
   g_aeq_filter_written = true;
 }
-static void cb_pot_mode(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
-{
-  if (len >= 1) {
-    g_pot_mode_u8 = data[0];
-    g_pot_mode_written = true;
-  }
-}
 static void cb_mode(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
 {
   if (len >= 1) {
@@ -243,7 +177,6 @@ void bleInit(uint16_t initialBrightness)
   brightness = initialBrightness;
 
   Bluefruit.begin();
-  loadPotMode();
 
   Bluefruit.autoConnLed(false);   // disable the blinking connection LED
   Bluefruit.setConnLedInterval(0);  // optional: no LED updates
@@ -343,14 +276,6 @@ void bleInit(uint16_t initialBrightness)
   aeqFilterCharacteristic.setUserDescriptor("AEQ smoothing (0..255)");
   aeqFilterCharacteristic.begin();
 
-  // potentiometer mode (uint8), read/write, persisted in internal flash
-  potModeCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
-  potModeCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
-  potModeCharacteristic.setFixedLen(1);
-  potModeCharacteristic.setWriteCallback(cb_pot_mode);
-  potModeCharacteristic.setUserDescriptor("Pot mode (0=Disabled,1=Brightness,2=EQ sensitivity)");
-  potModeCharacteristic.begin();
-
   // --- Initial values ---
   // NOTE: All u32 values are little-endian when written by apps/web
   brightnessCharacteristic.write32(brightness);
@@ -361,7 +286,6 @@ void bleInit(uint16_t initialBrightness)
   debugCharacteristic.write8(ledMode);
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   vBatCharacteristic.write16(vbat_mV);
-  potModeCharacteristic.write8(potMode);
   bleSetVolMinMax(vol_min, vol_max);
 
   writeSettingsString();
@@ -437,20 +361,6 @@ void bleUpdate()
     aeqFilterCharacteristic.write32(raw);
   }
 
-  if (g_pot_mode_written) {
-    g_pot_mode_written = false;
-    if (isValidPotMode(g_pot_mode_u8)) {
-      if (potMode != g_pot_mode_u8) {
-        potMode = g_pot_mode_u8;
-        if (!savePotMode()) {
-          Serial.println("Failed to persist potentiometer mode");
-        }
-      }
-    }
-    // Return the selected mode, or the last valid mode after an invalid write.
-    potModeCharacteristic.write8(potMode);
-  }
-
   if (g_mode_written) {
     g_mode_written = false;
     if (g_mode_u8 == MODE_BOOTLOADER) {
@@ -512,23 +422,6 @@ uint8_t  getLedMode()               { return ledMode; }
 float    getFilterAlpha()           { return filter_alpha; }
 float    bleGetNoiseFloor()         { return noise_floor; }
 float    bleGetAeqFilterAlpha()     { return aeq_filter_alpha; }
-uint8_t  bleGetPotMode()            { return potMode; }
-
-void bleSetBrightnessFromPot(uint16_t value)
-{
-  if (value > 400) value = 400;
-  brightness = value;
-  brightnessCharacteristic.write32(brightness);
-  writeSettingsString();
-}
-
-void bleSetSensitivityFromPot(uint16_t rawValue)
-{
-  if (rawValue > 1000) rawValue = 1000;
-  sensitivityF = (float)rawValue * SENSITIVITY_CONV_FACTOR;
-  sensitivityCharacteristic.write32(rawValue);
-  writeSettingsString();
-}
 
 void bleSetVBat_mV(uint16_t mv)
 {
