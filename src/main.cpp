@@ -1,9 +1,5 @@
 #include <Arduino.h>
 //#include "board_pins.h"
-#define USE_PDM
-#ifdef USE_PDM
-#include <PDM.h>
-#endif
 
 #ifndef ENABLE_NFC
 #define ENABLE_NFC 0
@@ -17,7 +13,7 @@ extern "C" {
 
 #include "battery.h"
 #include "ble_control.h"
-#include "adaptive_brightness.h"
+#include "audio_engine.h"
 #include "button_controller.h"
 #include "firefly_effect.h"
 #include "led_modes.h"
@@ -30,7 +26,6 @@ extern "C" {
 #include <string.h>
 //#include <nrf52840.h>
 
-#define SERIAL_OUTPUT
 #define USE_BLE
 
 #define BUTTON_POWER_OFF_DELAY_MS 5000UL
@@ -47,38 +42,6 @@ extern BLEUart bleuart;   // global
 
 typedef enum {charge_current_50, charge_current_100} charge_current_setting_t;
 charge_current_setting_t chargeCurrentSelection = charge_current_50;
-
-// default number of output channels
-static const char channels = 1;
-
-// default PCM output frequency
-static const int frequency = 16000;
-
-// The PDM callback fills one buffer while the main loop processes the other.
-// The library currently supplies 512-byte blocks (256 mono int16 samples), and
-// the larger capacity leaves room if its internal block size is changed later.
-static const uint16_t AUDIO_BUFFER_SAMPLES = 512;
-static int16_t audioBuffers[2][AUDIO_BUFFER_SAMPLES];
-static volatile int8_t readyAudioBuffer = -1;
-static volatile uint16_t readyAudioSamples = 0;
-static volatile uint8_t pdmWriteBuffer = 0;
-static volatile uint32_t droppedAudioBlocks = 0;
-
-// ---- Beat / loudness detection variables ----
-
-// Low-pass filtered loudness value
-float filteredLoudness = 0.0f;
-AdaptiveBrightness adaptiveBrightness;
-static uint8_t previousAudioMode = 0xFF;
-
-// How fast the filter reacts (0..1, closer to 0 = slower, more smoothing)
-const float LP_ALPHA = 0.15f;
-
-// ---- Volume min/max tracking over a 5s window ----
-static const uint32_t VOL_RANGE_WINDOW_MS = 5000;
-static uint16_t vol_window_min = 0xFFFF;
-static uint16_t vol_window_max = 0;
-static uint32_t vol_window_start_ms = 0;
 
 unsigned long lastBatSampleMs = 0;
 bool lowBattery = false;
@@ -234,10 +197,6 @@ static void updateNfcEffect()
 
 #endif
 
-#ifdef USE_PDM
-void onPDMdata();
-#endif
-
 #if ENABLE_NFC
 static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, size_t data_length)
 {
@@ -379,126 +338,6 @@ void setupWakeUpInterrupt()
   return;
 }
 
-static bool takeAudioBlock(uint8_t& bufferIndex, uint16_t& sampleCount)
-{
-  noInterrupts();
-  if (readyAudioBuffer < 0) {
-    interrupts();
-    return false;
-  }
-
-  bufferIndex = (uint8_t)readyAudioBuffer;
-  sampleCount = readyAudioSamples;
-  readyAudioBuffer = -1;
-  readyAudioSamples = 0;
-  interrupts();
-  return true;
-}
-
-void updateLEDs(const int16_t* samples, uint16_t sampleCount)
-{
-  // ---- Compute average absolute amplitude for this block ----
-  long sumAbs = 0;
-
-  for (uint16_t i = 0; i < sampleCount; i++) {
-    int32_t s = samples[i];
-    if (s < 0) s = -s;
-    sumAbs += s;
-  }
-
-  float avgLoudness = 0.0f;
-  if (sampleCount > 0) {
-    avgLoudness = (float)sumAbs / (float)sampleCount;
-  }
-
-  // ---- Low-pass filter over time (simple 1st-order IIR) ----
-  // filtered = filtered + alpha * (input - filtered)
-  filteredLoudness = filteredLoudness + getFilterAlpha() * (avgLoudness - filteredLoudness);
-
-  // ---- Track min/max over a fixed 5s window ----
-  uint16_t loud_u16 = 0;
-  if (filteredLoudness <= 0.0f) {
-    loud_u16 = 0;
-  } else if (filteredLoudness >= 65535.0f) {
-    loud_u16 = 65535;
-  } else {
-    loud_u16 = (uint16_t)(filteredLoudness + 0.5f);
-  }
-
-  uint32_t now_ms = millis();
-  if (vol_window_start_ms == 0) {
-    vol_window_start_ms = now_ms;
-  }
-  if (loud_u16 < vol_window_min) vol_window_min = loud_u16;
-  if (loud_u16 > vol_window_max) vol_window_max = loud_u16;
-
-  uint8_t ledMode = getLedMode();
-  if ((uint32_t)(now_ms - vol_window_start_ms) >= VOL_RANGE_WINDOW_MS) {
-    if (vol_window_min == 0xFFFF) vol_window_min = 0;
-    bleSetVolMinMax(vol_window_min, vol_window_max);
-
-    // Restart window
-    vol_window_start_ms = now_ms;
-    vol_window_min = 0xFFFF;
-    vol_window_max = 0;
-  }
-
-  float ledValueF = 0.0f;
-  if (ledMode == MODE_AEQ) {
-    // The adaptive processor normalizes signed PDM samples to -1..1, follows
-    // the ambient floor and typical peaks, and adds transient emphasis.
-    const float adaptiveOutput = adaptiveBrightness.process(
-        samples, sampleCount, (uint32_t)frequency, sensitivityF);
-    const uint16_t brightnessLimit =
-        brightness < LedOutput::PWM_MAX ? brightness : LedOutput::PWM_MAX;
-    ledValueF = adaptiveOutput * (float)brightnessLimit;
-  } else {
-    // Preserve the established MODE_EQ response and its BLE tuning controls.
-    float effectiveLoudness = filteredLoudness - bleGetNoiseFloor();
-    if (effectiveLoudness < 0.0f) effectiveLoudness = 0.0f;
-    ledValueF = effectiveLoudness * sensitivityF * ((float)brightness) / 100.0f;
-  }
-
-  if (ledValueF > (float)LedOutput::PWM_MAX)
-    ledValueF = (float)LedOutput::PWM_MAX;
-
-  int ledValue = (int)ledValueF;
-  
-  if (ledValue > brightness)
-    ledValue = brightness;
-
-  switch(ledMode)
-  {
-    case MODE_OFF: ledValue = 0; break;
-    case MODE_CONSTANT: ledValue = brightness; break;
-    case MODE_POWEROFF: ledValue = 0; break;
-    default:
-      break;
-  }
-
-  unsigned long t = millis();
-  if(t > 500UL){
-    LedOutput::write(ledValue);
-  }
-  // analogWrite(LED_BUILTIN, LedOutput::PWM_MAX - ledValue);
-  
-#ifdef SERIAL_OUTPUT
-  // Plot the filtered loudness (or effectiveLoudness) in Serial Plotter
-  /*Serial.print(effectiveLoudness);
-  Serial.print(", ");
-  Serial.print(filteredLoudness);
-  Serial.print(", ");
-  Serial.print(ledValue);      
-  Serial.print(", ");
-  Serial.print(sensitivityF);      
-  Serial.print(", ");
-  Serial.print(((float)brightness)/100.0f);
-  Serial.print(", ");
-  Serial.print(getBatteryVoltage());
-  Serial.print("\n");*/
-#endif
-}
-
 void shutdownISR()
 {
   shutdownIrqSeen = true;
@@ -585,18 +424,10 @@ void setup() {
   LedOutput::begin();
   pinMode(LED_BUILTIN, OUTPUT);
 
-#ifdef USE_PDM
-  // Configure the data receive callback
-  PDM.onReceive(onPDMdata);
-
-  // Optionally set the gain
-  //PDM.setGain(25);
-
-  if (!PDM.begin(channels, frequency)) {
+  if (!AudioEngine::begin()) {
     Serial.println("Failed to start PDM!");
     while (1);
   }
-#endif
 
   NRF_POWER->DCDCEN = 1;  //5.4mA-5.04mA
   //NRF_POWER->DCDCEN = 0;    //8.4mA
@@ -705,9 +536,6 @@ void loop()
                 
         LedOutput::setPinMode(INPUT_PULLDOWN);
         // pinMode(LED_BUILTIN, INPUT);   // off
-        // #ifdef USE_PDM
-        // PDM.end();
-        // #endif
         // ble_sleep();
 
         delay(1000);
@@ -724,13 +552,23 @@ void loop()
   }
   if (!low_power_condition)
   {
-    uint8_t audioBufferIndex = 0;
-    uint16_t audioSampleCount = 0;
-    const bool audioBlockReady = takeAudioBlock(audioBufferIndex, audioSampleCount);
     const uint8_t activeLedMode = getLedMode();
-    if (activeLedMode != previousAudioMode) {
-      if (activeLedMode == MODE_AEQ) adaptiveBrightness.reset();
-      previousAudioMode = activeLedMode;
+    bool effectOwnsLeds = activeLedMode == MODE_FIREFLY;
+#if ENABLE_NFC
+    effectOwnsLeds = effectOwnsLeds || nfcEffectActive;
+#endif
+
+    const AudioSettings audioSettings = {
+      activeLedMode,
+      (uint16_t)brightness,
+      sensitivityF,
+      getFilterAlpha(),
+      bleGetNoiseFloor(),
+    };
+    const AudioResult audioResult =
+        AudioEngine::update(audioSettings, !effectOwnsLeds, millis());
+    if (audioResult.volumeRangeReady) {
+      bleSetVolMinMax(audioResult.volumeMin, audioResult.volumeMax);
     }
 
 #if ENABLE_NFC
@@ -744,8 +582,8 @@ void loop()
         LedOutput::write(fireflyEffect.update(millis(), brightness));
       } else {
         fireflyEffect.reset();
-        if (audioBlockReady) {
-          updateLEDs(audioBuffers[audioBufferIndex], audioSampleCount);
+        if (audioResult.ledValueReady) {
+          LedOutput::write(audioResult.ledValue);
         }
       }
     }
@@ -793,33 +631,3 @@ void loop()
   }
   delay(2);
 }
-
-/**
- * Callback function to process the data from the PDM microphone.
- * NOTE: This callback is executed as part of an ISR.
- * Therefore using `Serial` to print messages inside this function isn't supported.
- */
-#ifdef USE_PDM
-void onPDMdata() {
-  // Query the number of available bytes
-  int bytesAvailable = PDM.available();
-  if (bytesAvailable <= 0) return;
-
-  const uint8_t destination = pdmWriteBuffer;
-  const int bufferBytes = (int)sizeof(audioBuffers[destination]);
-  if (bytesAvailable > bufferBytes) bytesAvailable = bufferBytes;
-
-  const int bytesRead = PDM.read(audioBuffers[destination], (size_t)bytesAvailable);
-  if (bytesRead <= 0) return;
-
-  // Publish only complete, stable buffers. If the main loop still owns the
-  // previous block, retain that block and count this new one as dropped.
-  if (readyAudioBuffer < 0) {
-    readyAudioSamples = (uint16_t)(bytesRead / (int)sizeof(int16_t));
-    readyAudioBuffer = (int8_t)destination;
-    pdmWriteBuffer = destination ^ 1U;
-  } else {
-    ++droppedAudioBlocks;
-  }
-}
-#endif
