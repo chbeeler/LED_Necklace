@@ -39,11 +39,8 @@ extern "C" {
 #define BUTTON_LONG_PRESS_MS    1500UL
 #define BUTTON_RELEASE_GUARD_MS 100UL
 #define BUTTON_POWER_OFF_DELAY_MS 5000UL
-#define BUTTON_SHUTDOWN_MAGIC   0xB1
-#define BUTTON_SYSTEM_OFF_MAGIC 0xB2
-// Diagnostic: keep button GPIO SENSE disabled in SYSTEMOFF. Reconnect USB to
-// wake the board. Set to 1 after the false-wake source has been identified.
-#define BUTTON_SYSTEM_OFF_WAKE_ENABLED 0
+#define BUTTON_WAKE_MAGIC       0xB2
+#define SYSTEM_OFF_MAGIC        0xA7
 
 static const uint16_t BRIGHTNESS_LEVELS[] = {
   5, 10, 20, 30, 50, 70, 100, 150, 250, 400
@@ -590,28 +587,6 @@ bool deepPowerDown(Adafruit_SPIFlash& flash, Adafruit_FlashTransport& transport)
   return (id_after == 0xFFFFFF || id_after == 0xFFFFFFFF);
 }
 
-static void configureButtonWakeSources()
-{
-#if BUTTON_SYSTEM_OFF_WAKE_ENABLED
-  digitalWrite(BUTTON_1_DRIVE_PIN, HIGH);
-  pinMode(BUTTON_1_DRIVE_PIN, OUTPUT);
-  digitalWrite(BUTTON_2_DRIVE_PIN, HIGH);
-  pinMode(BUTTON_2_DRIVE_PIN, OUTPUT);
-
-  // Either button may wake the MCU electrically. Firmware then requires the
-  // complete two-button hold before it finishes booting.
-  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN_SENSE);
-  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN_SENSE);
-#else
-  // Diagnostic configuration: no GPIO SENSE source and no driven button pin.
-  // This rules out button wiring, bounce, and GPIO latches as wake causes.
-  pinMode(BUTTON_1_DRIVE_PIN, INPUT_PULLDOWN);
-  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN);
-  pinMode(BUTTON_2_DRIVE_PIN, INPUT_PULLDOWN);
-  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN);
-#endif
-}
-
 static void waitForButtonsReleased()
 {
   uint32_t releasedSinceMs = 0;
@@ -632,25 +607,67 @@ static void waitForButtonsReleased()
   }
 }
 
-static void enterButtonHardwareSystemOff()
+static void configureButtonWakeSources()
 {
-  // Entering SYSTEMOFF while a wake input is already active would cause an
-  // immediate reboot. Require both inputs to remain released continuously.
-  setupButtons();
-  waitForButtonsReleased();
+  // Keep one side of each button driven HIGH and let either sense pin wake the
+  // nRF52 from SYSTEMOFF. The retained marker in GPREGRET makes setup require
+  // the full two-button gesture before completing startup.
+  digitalWrite(BUTTON_1_DRIVE_PIN, HIGH);
+  pinMode(BUTTON_1_DRIVE_PIN, OUTPUT);
+  digitalWrite(BUTTON_2_DRIVE_PIN, HIGH);
+  pinMode(BUTTON_2_DRIVE_PIN, OUTPUT);
+  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN_SENSE);
+  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN_SENSE);
 
-  NRF_POWER->GPREGRET = BUTTON_SYSTEM_OFF_MAGIC;
-  configureButtonWakeSources();
-
-  // Clear wake events latched while the buttons were previously held. This is
-  // done after configuring SENSE and while both inputs are known to be LOW.
+  // Clear any GPIO event latched while configuring SENSE. Both buttons have
+  // already been verified released, so a later HIGH is a genuine wake event.
   NRF_P0->LATCH = 0xFFFFFFFFUL;
   NRF_P1->LATCH = 0xFFFFFFFFUL;
+}
+
+static bool waitForButtonPowerOnGesture()
+{
+  uint32_t bothPressedSinceMs = 0;
+  uint32_t bothReleasedSinceMs = 0;
+
+  Serial.println("Button wake: hold both buttons for 1.5 seconds to power on");
+  while (true) {
+    const bool plusPressed = digitalRead(BUTTON_1_SENSE_PIN) == HIGH;
+    const bool minusPressed = digitalRead(BUTTON_2_SENSE_PIN) == HIGH;
+    const uint32_t nowMs = millis();
+
+    if (plusPressed && minusPressed) {
+      bothReleasedSinceMs = 0;
+      if (bothPressedSinceMs == 0) {
+        bothPressedSinceMs = nowMs;
+      } else if ((uint32_t)(nowMs - bothPressedSinceMs) >=
+                 BUTTON_LONG_PRESS_MS) {
+        Serial.println("Both buttons held: powering on");
+        return true;
+      }
+    } else {
+      bothPressedSinceMs = 0;
+      if (!plusPressed && !minusPressed) {
+        if (bothReleasedSinceMs == 0) {
+          bothReleasedSinceMs = nowMs;
+        } else if ((uint32_t)(nowMs - bothReleasedSinceMs) >=
+                   BUTTON_RELEASE_GUARD_MS) {
+          return false;
+        }
+      } else {
+        bothReleasedSinceMs = 0;
+      }
+    }
+    delay(5);
+  }
+}
+
+static void resetIntoSystemOffPath()
+{
+  NRF_POWER->GPREGRET = SYSTEM_OFF_MAGIC;
   __DSB();
   __ISB();
-  sd_power_system_off();
-
-  while (1) yield();
+  NVIC_SystemReset();
 }
 
 static void requestButtonSystemOff()
@@ -662,72 +679,10 @@ static void requestButtonSystemOff()
   delay(BUTTON_POWER_OFF_DELAY_MS);
   waitForButtonsReleased();
 
-#ifdef USE_PDM
-  PDM.end();
-#endif
-#ifdef USE_BLE
-  ble_sleep();
-#endif
-
-  if (!vbusConnected()) {
-    flash.begin();
-    if (!deepPowerDown(flash, flashTransport)) {
-      Serial.println("Flash deep power-down failed");
-    }
-    flash.end();
-  }
-
-  // Match the reliable app-triggered shutdown path: reset first, then enter
-  // SYSTEMOFF early in setup with peripherals and GPIO wake latches reset.
-  NRF_POWER->GPREGRET = BUTTON_SHUTDOWN_MAGIC;
-  __DSB();
-  __ISB();
-  NVIC_SystemReset();
-}
-
-static void waitForButtonPowerOn()
-{
-  Serial.println("System off: hold Plus and Minus for 1.5 seconds to power on");
-  uint32_t bothPressedSinceMs = 0;
-  uint32_t bothReleasedSinceMs = 0;
-
-  while (true) {
-    const uint32_t nowMs = millis();
-    const bool plusPressed = digitalRead(BUTTON_1_SENSE_PIN) == HIGH;
-    const bool minusPressed = digitalRead(BUTTON_2_SENSE_PIN) == HIGH;
-
-    if (plusPressed && minusPressed) {
-      bothReleasedSinceMs = 0;
-      if (bothPressedSinceMs == 0) bothPressedSinceMs = nowMs;
-      if ((uint32_t)(nowMs - bothPressedSinceMs) >= BUTTON_LONG_PRESS_MS) {
-        Serial.println("Power-on gesture accepted");
-        NRF_POWER->GPREGRET = 0;
-
-        // Do not let the same hold become a new shutdown chord after setup.
-        waitForButtonsReleased();
-        return;
-      }
-    } else {
-      bothPressedSinceMs = 0;
-      if (!plusPressed && !minusPressed) {
-        if (bothReleasedSinceMs == 0) bothReleasedSinceMs = nowMs;
-        if ((uint32_t)(nowMs - bothReleasedSinceMs) >= 250UL) {
-          if (!vbusConnected()) {
-            // A single/accidental battery-powered wake was released without
-            // completing the power-on chord. Return to true SYSTEMOFF.
-            enterButtonHardwareSystemOff();
-          }
-
-          // On USB, remain in this minimal logical-off gate; entering
-          // SYSTEMOFF would be followed immediately by a VBUS wake.
-          bothReleasedSinceMs = nowMs;
-        }
-      } else {
-        bothReleasedSinceMs = 0;
-      }
-    }
-    delay(5);
-  }
+  // Use exactly the same shutdown request consumed by the BLE/app power-off
+  // command. The next loop iteration records GPREGRET and resets; setup then
+  // enables Bluefruit before calling sd_power_system_off().
+  lowPowerTest = true;
 }
 
 void setupWakeUpInterrupt()
@@ -877,32 +832,25 @@ void shutdownISR()
 }
 
 void setup() {
-  if (NRF_POWER->GPREGRET == BUTTON_SHUTDOWN_MAGIC) {
-    if (vbusConnected()) {
-      // VBUS wakes SYSTEMOFF immediately, so USB development uses the same
-      // marker-controlled off gate without attempting hardware SYSTEMOFF.
-      NRF_POWER->GPREGRET = BUTTON_SYSTEM_OFF_MAGIC;
-      Serial.begin(115200);
-      setupButtons();
-      Serial.println("USB present: entering logical off gate");
-      waitForButtonPowerOn();
-    } else {
-      // This early-boot path mirrors the app-triggered shutdown sequence and
-      // avoids carrying active BLE/PDM/GPIOTE state into SYSTEMOFF.
-      enterButtonHardwareSystemOff();
-    }
-  }
-
-  if (NRF_POWER->GPREGRET == BUTTON_SYSTEM_OFF_MAGIC) {
+  // A GPIO event can wake SYSTEMOFF on either button. Do not perform normal
+  // startup until both buttons have been held for the intended power gesture.
+  if (NRF_POWER->GPREGRET == BUTTON_WAKE_MAGIC)
+  {
     Serial.begin(115200);
     setupButtons();
-    waitForButtonPowerOn();
+
+    if (!waitForButtonPowerOnGesture()) {
+      resetIntoSystemOffPath();
+    }
+
+    NRF_POWER->GPREGRET = 0;
+    waitForButtonsReleased();
   }
 
   // If a low-battery reset was requested, enter SYSTEMOFF only when USB is
   // still absent.  Connecting USB must always allow the device to boot, even
   // when no battery is installed or a previous boot set the reset marker.
-  if (NRF_POWER->GPREGRET == 0xA7)
+  if (NRF_POWER->GPREGRET == SYSTEM_OFF_MAGIC)
   {
     NRF_POWER->GPREGRET = 0;
 
@@ -919,6 +867,12 @@ void setup() {
       }
 
       flash.end();
+      setupButtons();
+      waitForButtonsReleased();
+      configureButtonWakeSources();
+      NRF_POWER->GPREGRET = BUTTON_WAKE_MAGIC;
+      __DSB();
+      __ISB();
       sd_power_system_off();
     }
   }
@@ -1029,9 +983,7 @@ void loop()
   {
     setLedPinMode(INPUT_PULLDOWN);
 
-    NRF_POWER->GPREGRET  = 0xA7;
-    __DSB(); __ISB();
-    NVIC_SystemReset();
+    resetIntoSystemOffPath();
   }
 
   if (low_power_condition) {
@@ -1064,9 +1016,7 @@ void loop()
         delay(1000);
         Serial.write("Step 3");
 
-        NRF_POWER->GPREGRET  = 0xA7;
-        __DSB(); __ISB();
-        NVIC_SystemReset();
+        resetIntoSystemOffPath();
       }      
     }
     else    //Otherwise we keep running without LEDs
