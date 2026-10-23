@@ -1,4 +1,5 @@
 #include "ble_control.h"
+#include "led_modes.h"
 #include <Arduino.h>
 #include <nrf_soc.h>
 
@@ -32,12 +33,6 @@ static uint16_t vbat_mV      = 0;
 static uint16_t vol_min      = 0;
 static uint16_t vol_max      = 0;
 
-static const uint8_t MODE_EQ       = 1;
-static const uint8_t MODE_CONSTANT = 2;
-static const uint8_t MODE_OFF      = 0;
-static const uint8_t MODE_AEQ      = 3;
-static const uint8_t MODE_POWEROFF = 9;
-static const uint8_t MODE_BOOTLOADER = 55;
 static const uint8_t DFU_MAGIC_UF2_RESET = 0x57;
 
 // ===== flags / buffers filled by BLE callbacks =====

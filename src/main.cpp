@@ -18,6 +18,10 @@ extern "C" {
 #include "battery.h"
 #include "ble_control.h"
 #include "adaptive_brightness.h"
+#include "button_controller.h"
+#include "firefly_effect.h"
+#include "led_modes.h"
+#include "led_output.h"
 
 #include <Adafruit_SPIFlash.h>
 #include <LSM6DS3.h>
@@ -29,15 +33,6 @@ extern "C" {
 #define SERIAL_OUTPUT
 #define USE_BLE
 
-// Each button is wired between two GPIO pins.  Drive one side HIGH and use a
-// pull-down on the other side, so a closed button reads HIGH.
-#define BUTTON_1_DRIVE_PIN      D7
-#define BUTTON_1_SENSE_PIN      D9
-#define BUTTON_2_DRIVE_PIN      D4
-#define BUTTON_2_SENSE_PIN      D6
-#define BUTTON_DEBOUNCE_MS      25UL
-#define BUTTON_LONG_PRESS_MS    1500UL
-#define BUTTON_RELEASE_GUARD_MS 100UL
 #define BUTTON_POWER_OFF_DELAY_MS 5000UL
 #define BUTTON_WAKE_MAGIC       0xB2
 #define SYSTEM_OFF_MAGIC        0xA7
@@ -48,66 +43,7 @@ static const uint16_t BRIGHTNESS_LEVELS[] = {
 static const size_t BRIGHTNESS_LEVEL_COUNT =
     sizeof(BRIGHTNESS_LEVELS) / sizeof(BRIGHTNESS_LEVELS[0]);
 
-// Firefly cycle timing.
-#define FIREFLY_FADE_IN_MS       350UL
-#define FIREFLY_ON_MS              20UL
-#define FIREFLY_FADE_OUT_MS      900UL
-#define FIREFLY_NORMAL_PAUSE_MIN_MS       1500UL
-#define FIREFLY_NORMAL_PAUSE_MAX_MS       3500UL
-#define FIREFLY_DOUBLE_GAP_MIN_MS           350UL
-#define FIREFLY_DOUBLE_GAP_MAX_MS           700UL
-#define FIREFLY_POST_DOUBLE_PAUSE_MIN_MS   1800UL
-#define FIREFLY_POST_DOUBLE_PAUSE_MAX_MS   4000UL
-#define FIREFLY_LONG_PAUSE_MIN_MS          4000UL
-#define FIREFLY_LONG_PAUSE_MAX_MS          7000UL
-#define FIREFLY_DOUBLE_FLASH_PERCENT         20
-#define FIREFLY_LONG_PAUSE_PERCENT           10
-#define FIREFLY_SECOND_FLASH_MIN_PERCENT      60
-#define FIREFLY_SECOND_FLASH_MAX_PERCENT      85
-#define FIREFLY_GAMMA              2.2f
-
-#if FIREFLY_FADE_IN_MS == 0 || FIREFLY_FADE_OUT_MS == 0
-#error "Firefly fade durations must be greater than zero"
-#endif
-
-#if FIREFLY_NORMAL_PAUSE_MIN_MS > FIREFLY_NORMAL_PAUSE_MAX_MS || \
-    FIREFLY_DOUBLE_GAP_MIN_MS > FIREFLY_DOUBLE_GAP_MAX_MS || \
-    FIREFLY_POST_DOUBLE_PAUSE_MIN_MS > FIREFLY_POST_DOUBLE_PAUSE_MAX_MS || \
-    FIREFLY_LONG_PAUSE_MIN_MS > FIREFLY_LONG_PAUSE_MAX_MS
-#error "Firefly minimum durations must not exceed their maximums"
-#endif
-
-#if FIREFLY_DOUBLE_FLASH_PERCENT + FIREFLY_LONG_PAUSE_PERCENT > 100
-#error "Firefly event probabilities must not exceed 100 percent"
-#endif
-
-#if FIREFLY_SECOND_FLASH_MIN_PERCENT > FIREFLY_SECOND_FLASH_MAX_PERCENT || \
-    FIREFLY_SECOND_FLASH_MAX_PERCENT > 100
-#error "Firefly second-flash brightness percentages are invalid"
-#endif
-
 extern BLEUart bleuart;   // global
-
-// ---- PWM configuration ----
-const uint8_t PWM_RES_BITS = 12;    // 12-bit: 0..4095 (nRF52840 HW can do up to 15 bits)
-uint16_t pwmMax = (1 << PWM_RES_BITS) - 1;
-
-#define LED_CHANNEL          D3  // Existing necklace PCB connection.
-#define LED_CHANNEL_DUPLICATE D0 // Easier-to-solder connection for new PCBs.
-
-static void writeLedPwm(uint32_t value)
-{
-  // Both pins are channels of the same hardware PWM peripheral, so they carry
-  // the same waveform while retaining compatibility with the original pinout.
-  analogWrite(LED_CHANNEL, value);
-  analogWrite(LED_CHANNEL_DUPLICATE, value);
-}
-
-static void setLedPinMode(uint8_t mode)
-{
-  pinMode(LED_CHANNEL, mode);
-  pinMode(LED_CHANNEL_DUPLICATE, mode);
-}
 
 typedef enum {charge_current_50, charge_current_100} charge_current_setting_t;
 charge_current_setting_t chargeCurrentSelection = charge_current_50;
@@ -144,13 +80,6 @@ static uint16_t vol_window_min = 0xFFFF;
 static uint16_t vol_window_max = 0;
 static uint32_t vol_window_start_ms = 0;
 
-static const uint8_t MODE_OFF      = 0;
-static const uint8_t MODE_EQ       = 1;
-static const uint8_t MODE_CONSTANT = 2;
-static const uint8_t MODE_AEQ      = 3;
-static const uint8_t MODE_FIREFLY  = 4;
-static const uint8_t MODE_POWEROFF = 9;
-
 unsigned long lastBatSampleMs = 0;
 bool lowBattery = false;
 
@@ -166,21 +95,6 @@ uint32_t nfcEffectStartMs = 0;
 uint32_t lastBleCtrlUpdateMs = 0;
 uint32_t lastBleVbatUpdateMs = 0;
 
-struct ButtonState {
-  bool rawPressed;
-  bool stablePressed;
-  uint32_t rawChangedMs;
-  uint32_t pressedMs;
-};
-
-static ButtonState button1State = {false, false, 0, 0};
-static ButtonState button2State = {false, false, 0, 0};
-static bool plusLongHandled = false;
-static bool minusLongHandled = false;
-static bool chordActive = false;
-static bool chordHandled = false;
-static uint32_t chordStartedMs = 0;
-static bool buttonSystemOffRequested = false;
 static uint8_t previousOnMode = MODE_AEQ;
 
 #if ENABLE_NFC
@@ -192,166 +106,7 @@ static const int NFC_EFFECT_MAX = 250;
 static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
 
-enum FireflyPhase : uint8_t {
-  FIREFLY_FADE_IN,
-  FIREFLY_ON,
-  FIREFLY_FADE_OUT,
-  FIREFLY_PAUSE
-};
-
-static FireflyPhase fireflyPhase = FIREFLY_FADE_IN;
-static uint32_t fireflyPhaseStartMs = 0;
-static uint32_t fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
-static bool fireflyActive = false;
-static bool fireflyIsSecondFlash = false;
-static bool fireflyNextFlashIsSecond = false;
-static float fireflyPeakScale = 1.0f;
-static float fireflyNextPeakScale = 1.0f;
-
-static uint32_t randomDuration(uint32_t minMs, uint32_t maxMs)
-{
-  return (uint32_t)random((long)minMs, (long)maxMs + 1L);
-}
-
-static void startFirefly(uint32_t nowMs)
-{
-  fireflyActive = true;
-  fireflyPhase = FIREFLY_FADE_IN;
-  fireflyPhaseStartMs = nowMs;
-  fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
-  fireflyIsSecondFlash = false;
-  fireflyNextFlashIsSecond = false;
-  fireflyPeakScale = 1.0f;
-  fireflyNextPeakScale = 1.0f;
-}
-
-static void advanceFireflyPhase()
-{
-  fireflyPhaseStartMs += fireflyPhaseDurationMs;
-
-  switch (fireflyPhase) {
-    case FIREFLY_FADE_IN:
-      fireflyPhase = FIREFLY_ON;
-      fireflyPhaseDurationMs = FIREFLY_ON_MS;
-      break;
-    case FIREFLY_ON:
-      fireflyPhase = FIREFLY_FADE_OUT;
-      fireflyPhaseDurationMs = FIREFLY_FADE_OUT_MS;
-      break;
-    case FIREFLY_FADE_OUT:
-      fireflyPhase = FIREFLY_PAUSE;
-      if (fireflyIsSecondFlash) {
-        fireflyNextFlashIsSecond = false;
-        fireflyNextPeakScale = 1.0f;
-        fireflyPhaseDurationMs = randomDuration(
-            FIREFLY_POST_DOUBLE_PAUSE_MIN_MS,
-            FIREFLY_POST_DOUBLE_PAUSE_MAX_MS);
-      } else {
-        long eventRoll = random(100);
-        if (eventRoll < FIREFLY_DOUBLE_FLASH_PERCENT) {
-          fireflyNextFlashIsSecond = true;
-          fireflyNextPeakScale = (float)random(
-              FIREFLY_SECOND_FLASH_MIN_PERCENT,
-              FIREFLY_SECOND_FLASH_MAX_PERCENT + 1) / 100.0f;
-          fireflyPhaseDurationMs = randomDuration(
-              FIREFLY_DOUBLE_GAP_MIN_MS,
-              FIREFLY_DOUBLE_GAP_MAX_MS);
-        } else {
-          fireflyNextFlashIsSecond = false;
-          fireflyNextPeakScale = 1.0f;
-          if (eventRoll < FIREFLY_DOUBLE_FLASH_PERCENT + FIREFLY_LONG_PAUSE_PERCENT) {
-            fireflyPhaseDurationMs = randomDuration(
-                FIREFLY_LONG_PAUSE_MIN_MS,
-                FIREFLY_LONG_PAUSE_MAX_MS);
-          } else {
-            fireflyPhaseDurationMs = randomDuration(
-                FIREFLY_NORMAL_PAUSE_MIN_MS,
-                FIREFLY_NORMAL_PAUSE_MAX_MS);
-          }
-        }
-      }
-      break;
-    case FIREFLY_PAUSE:
-      fireflyPhase = FIREFLY_FADE_IN;
-      fireflyPhaseDurationMs = FIREFLY_FADE_IN_MS;
-      fireflyIsSecondFlash = fireflyNextFlashIsSecond;
-      fireflyPeakScale = fireflyNextPeakScale;
-      break;
-  }
-}
-
-static float smoothstep(float x)
-{
-  return x * x * (3.0f - 2.0f * x);
-}
-
-static void updateFirefly(uint32_t nowMs)
-{
-  if (!fireflyActive) startFirefly(nowMs);
-
-  // Normally this advances at most once. The loop also catches up cleanly if
-  // another operation temporarily delayed execution.
-  while ((uint32_t)(nowMs - fireflyPhaseStartMs) >= fireflyPhaseDurationMs) {
-    advanceFireflyPhase();
-  }
-
-  float level = 0.0f;
-  if (fireflyPhase == FIREFLY_ON) {
-    level = 1.0f;
-  } else if (fireflyPhase == FIREFLY_FADE_IN || fireflyPhase == FIREFLY_FADE_OUT) {
-    float progress = (float)(nowMs - fireflyPhaseStartMs) /
-                     (float)fireflyPhaseDurationMs;
-    float eased = smoothstep(progress);
-    if (fireflyPhase == FIREFLY_FADE_IN) {
-      // Quick nonlinear rise: sqrt(smoothstep(x)).
-      level = sqrtf(eased);
-    } else {
-      // Softer nonlinear decay: 1 - smoothstep(x)^1.5.
-      level = 1.0f - powf(eased, 1.5f);
-    }
-  }
-
-  // Gamma-correct only the normalized envelope, then scale it so level 1.0
-  // always maps exactly to the brightness selected over BLE.
-  float pwmLevel = powf(level, FIREFLY_GAMMA);
-  uint32_t ledValue = (uint32_t)(
-      (float)brightness * fireflyPeakScale * pwmLevel + 0.5f);
-  if (ledValue > pwmMax) ledValue = pwmMax;
-  writeLedPwm(ledValue);
-}
-
-static void setupButtons()
-{
-  // Set the output latch before enabling output mode to avoid a LOW glitch.
-  digitalWrite(BUTTON_1_DRIVE_PIN, HIGH);
-  pinMode(BUTTON_1_DRIVE_PIN, OUTPUT);
-  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN);
-
-  digitalWrite(BUTTON_2_DRIVE_PIN, HIGH);
-  pinMode(BUTTON_2_DRIVE_PIN, OUTPUT);
-  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN);
-}
-
-static void updateButton(ButtonState &state,
-                         bool rawPressed,
-                         uint32_t nowMs,
-                         const char *name)
-{
-  if (rawPressed != state.rawPressed) {
-    state.rawPressed = rawPressed;
-    state.rawChangedMs = nowMs;
-  }
-
-  if (state.stablePressed != state.rawPressed &&
-      (uint32_t)(nowMs - state.rawChangedMs) >= BUTTON_DEBOUNCE_MS) {
-    state.stablePressed = state.rawPressed;
-    if (state.stablePressed) {
-      state.pressedMs = nowMs;
-      Serial.print(name);
-      Serial.println(" pressed");
-    }
-  }
-}
+static FireflyEffect fireflyEffect;
 
 static void changeBrightness(bool increase)
 {
@@ -409,86 +164,11 @@ static void toggleLedOutput()
   } else {
     previousOnMode = currentMode;
     bleSetModeFromButtons(MODE_OFF);
-    writeLedPwm(0);
+    LedOutput::write(0);
     Serial.println("LED output: off");
   }
 }
 
-static void updateButtons(uint32_t nowMs)
-{
-  const bool plusWasPressed = button1State.stablePressed;
-  const bool minusWasPressed = button2State.stablePressed;
-
-  updateButton(button1State,
-               digitalRead(BUTTON_1_SENSE_PIN) == HIGH,
-               nowMs,
-               "Plus (D7-D9)");
-  updateButton(button2State,
-               digitalRead(BUTTON_2_SENSE_PIN) == HIGH,
-               nowMs,
-               "Minus (D4-D6)");
-
-  const bool plusPressed = button1State.stablePressed;
-  const bool minusPressed = button2State.stablePressed;
-
-  if (!plusWasPressed && plusPressed) plusLongHandled = false;
-  if (!minusWasPressed && minusPressed) minusLongHandled = false;
-
-  if (plusPressed && minusPressed) {
-    if (!chordActive) {
-      chordActive = true;
-      chordHandled = false;
-      chordStartedMs = nowMs;
-      // A chord always takes priority over both individual gestures.
-      plusLongHandled = true;
-      minusLongHandled = true;
-    }
-
-    if (!chordHandled &&
-        (uint32_t)(nowMs - chordStartedMs) >= BUTTON_LONG_PRESS_MS) {
-      chordHandled = true;
-      buttonSystemOffRequested = true;
-      Serial.println("Both buttons held: system off requested");
-    }
-    return;
-  }
-
-  // Once a chord starts, suppress all individual actions until both buttons
-  // have been released.
-  if (chordActive) {
-    if (!plusPressed && !minusPressed) {
-      chordActive = false;
-      chordHandled = false;
-      plusLongHandled = false;
-      minusLongHandled = false;
-    }
-    return;
-  }
-
-  if (plusPressed && !plusLongHandled &&
-      (uint32_t)(nowMs - button1State.pressedMs) >= BUTTON_LONG_PRESS_MS) {
-    plusLongHandled = true;
-    toggleAeqConstantMode();
-  }
-
-  if (minusPressed && !minusLongHandled &&
-      (uint32_t)(nowMs - button2State.pressedMs) >= BUTTON_LONG_PRESS_MS) {
-    minusLongHandled = true;
-    toggleLedOutput();
-  }
-
-  // Short actions happen on release, so a long press never also changes the
-  // brightness preset.
-  if (plusWasPressed && !plusPressed) {
-    if (!plusLongHandled) changeBrightness(true);
-    plusLongHandled = false;
-  }
-
-  if (minusWasPressed && !minusPressed) {
-    if (!minusLongHandled) changeBrightness(false);
-    minusLongHandled = false;
-  }
-}
 #if ENABLE_NFC
 static const uint8_t NFC_URI_PREFIX = 0x04; // "https://"
 static const char NFC_URI_TEXT[] = "wa.me/41774321412?text=Hey%20Chris%2C%20cool%20necklace%21";
@@ -545,11 +225,11 @@ static void updateNfcEffect()
 
   if (ledValue < 0) {
     ledValue = 0;
-  } else if (ledValue > (int)pwmMax) {
-    ledValue = pwmMax;
+  } else if (ledValue > (int)LedOutput::PWM_MAX) {
+    ledValue = LedOutput::PWM_MAX;
   }
 
-  writeLedPwm(ledValue);
+  LedOutput::write(ledValue);
 }
 
 #endif
@@ -587,44 +267,6 @@ bool deepPowerDown(Adafruit_SPIFlash& flash, Adafruit_FlashTransport& transport)
   return (id_after == 0xFFFFFF || id_after == 0xFFFFFFFF);
 }
 
-static void waitForButtonsReleased()
-{
-  uint32_t releasedSinceMs = 0;
-  while (true) {
-    const bool eitherPressed =
-        digitalRead(BUTTON_1_SENSE_PIN) == HIGH ||
-        digitalRead(BUTTON_2_SENSE_PIN) == HIGH;
-
-    if (eitherPressed) {
-      releasedSinceMs = 0;
-    } else if (releasedSinceMs == 0) {
-      releasedSinceMs = millis();
-    } else if ((uint32_t)(millis() - releasedSinceMs) >=
-               BUTTON_RELEASE_GUARD_MS) {
-      return;
-    }
-    delay(5);
-  }
-}
-
-static void configureButtonWakeSources()
-{
-  // Keep one side of each button driven HIGH and let either sense pin wake the
-  // nRF52 from SYSTEMOFF. The retained marker in GPREGRET makes setup require
-  // the full two-button gesture before completing startup.
-  digitalWrite(BUTTON_1_DRIVE_PIN, HIGH);
-  pinMode(BUTTON_1_DRIVE_PIN, OUTPUT);
-  digitalWrite(BUTTON_2_DRIVE_PIN, HIGH);
-  pinMode(BUTTON_2_DRIVE_PIN, OUTPUT);
-  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN_SENSE);
-  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN_SENSE);
-
-  // Clear any GPIO event latched while configuring SENSE. Both buttons have
-  // already been verified released, so a later HIGH is a genuine wake event.
-  NRF_P0->LATCH = 0xFFFFFFFFUL;
-  NRF_P1->LATCH = 0xFFFFFFFFUL;
-}
-
 static void setDiagnosticLed(bool on)
 {
   // The XIAO's onboard LED is active-low.
@@ -650,8 +292,8 @@ static bool waitForButtonPowerOnGesture()
 
   Serial.println("Button wake: hold both buttons for 1.5 seconds to power on");
   while (true) {
-    const bool plusPressed = digitalRead(BUTTON_1_SENSE_PIN) == HIGH;
-    const bool minusPressed = digitalRead(BUTTON_2_SENSE_PIN) == HIGH;
+    const bool plusPressed = ButtonController::plusPressedRaw();
+    const bool minusPressed = ButtonController::minusPressedRaw();
     const uint32_t nowMs = millis();
 
     // Wake-gate diagnostics on the onboard LED:
@@ -669,7 +311,7 @@ static bool waitForButtonPowerOnGesture()
       if (bothPressedSinceMs == 0) {
         bothPressedSinceMs = nowMs;
       } else if ((uint32_t)(nowMs - bothPressedSinceMs) >=
-                 BUTTON_LONG_PRESS_MS) {
+                 ButtonController::LONG_PRESS_MS) {
         Serial.println("Both buttons held: powering on");
         setDiagnosticLed(false);
         blinkDiagnosticLed(3, 80, 80);
@@ -681,7 +323,7 @@ static bool waitForButtonPowerOnGesture()
         if (bothReleasedSinceMs == 0) {
           bothReleasedSinceMs = nowMs;
         } else if ((uint32_t)(nowMs - bothReleasedSinceMs) >=
-                   BUTTON_RELEASE_GUARD_MS) {
+                   ButtonController::RELEASE_GUARD_MS) {
           return false;
         }
       } else {
@@ -704,10 +346,10 @@ static void requestButtonSystemOff()
 {
   // Make the shutdown immediately visible, then deliberately leave the MCU
   // awake for five seconds so the transition is easy to observe and debug.
-  writeLedPwm(0);
+  LedOutput::write(0);
   Serial.println("LEDs off; system shutdown in 5 seconds");
   delay(BUTTON_POWER_OFF_DELAY_MS);
-  waitForButtonsReleased();
+  ButtonController::waitForRelease();
 
   // Use exactly the same shutdown request consumed by the BLE/app power-off
   // command. The next loop iteration records GPREGRET and resets; setup then
@@ -807,7 +449,8 @@ void updateLEDs(const int16_t* samples, uint16_t sampleCount)
     // the ambient floor and typical peaks, and adds transient emphasis.
     const float adaptiveOutput = adaptiveBrightness.process(
         samples, sampleCount, (uint32_t)frequency, sensitivityF);
-    const uint16_t brightnessLimit = brightness < pwmMax ? brightness : pwmMax;
+    const uint16_t brightnessLimit =
+        brightness < LedOutput::PWM_MAX ? brightness : LedOutput::PWM_MAX;
     ledValueF = adaptiveOutput * (float)brightnessLimit;
   } else {
     // Preserve the established MODE_EQ response and its BLE tuning controls.
@@ -816,8 +459,8 @@ void updateLEDs(const int16_t* samples, uint16_t sampleCount)
     ledValueF = effectiveLoudness * sensitivityF * ((float)brightness) / 100.0f;
   }
 
-  if (ledValueF > (float)pwmMax)
-    ledValueF = (float)pwmMax;
+  if (ledValueF > (float)LedOutput::PWM_MAX)
+    ledValueF = (float)LedOutput::PWM_MAX;
 
   int ledValue = (int)ledValueF;
   
@@ -835,9 +478,9 @@ void updateLEDs(const int16_t* samples, uint16_t sampleCount)
 
   unsigned long t = millis();
   if(t > 500UL){
-    writeLedPwm(ledValue);
+    LedOutput::write(ledValue);
   }
-  //analogWrite(LED_BUILTIN, pwmMax-ledValue);
+  // analogWrite(LED_BUILTIN, LedOutput::PWM_MAX - ledValue);
   
 #ifdef SERIAL_OUTPUT
   // Plot the filtered loudness (or effectiveLoudness) in Serial Plotter
@@ -889,12 +532,12 @@ void setup() {
       Serial.println("USB wake: bypassing button power-on gate");
       blinkDiagnosticLed(2, 80, 80);
     } else {
-      setupButtons();
+      ButtonController::begin();
       if (!waitForButtonPowerOnGesture()) {
         setDiagnosticLed(false);
         resetIntoSystemOffPath();
       }
-      waitForButtonsReleased();
+      ButtonController::waitForRelease();
     }
 
     NRF_POWER->GPREGRET = 0;
@@ -920,9 +563,9 @@ void setup() {
       }
 
       flash.end();
-      setupButtons();
-      waitForButtonsReleased();
-      configureButtonWakeSources();
+      ButtonController::begin();
+      ButtonController::waitForRelease();
+      ButtonController::configureWakeSources();
       // Bluefruit has enabled the SoftDevice, so use its API for the retained
       // marker instead of writing the protected POWER register directly.
       sd_power_gpregret_clr(0, 0xFF);
@@ -936,12 +579,10 @@ void setup() {
   batteryInit();
 
   Serial.begin(115200);
-  setupButtons();
+  ButtonController::begin();
   randomSeed(NRF_FICR->DEVICEID[0] ^ NRF_FICR->DEVICEID[1] ^ micros());
 
-  analogWriteResolution(PWM_RES_BITS);
-  setLedPinMode(OUTPUT);
-  writeLedPwm(0);
+  LedOutput::begin();
   pinMode(LED_BUILTIN, OUTPUT);
 
 #ifdef USE_PDM
@@ -1037,15 +678,15 @@ void loop()
 
   if(lowPowerTest)
   {
-    setLedPinMode(INPUT_PULLDOWN);
+    LedOutput::setPinMode(INPUT_PULLDOWN);
 
     resetIntoSystemOffPath();
   }
 
   if (low_power_condition) {
     // Immediately stop LEDs
-    writeLedPwm(0);
-    //analogWrite(LED_BUILTIN, pwmMax);
+    LedOutput::write(0);
+    // analogWrite(LED_BUILTIN, LedOutput::PWM_MAX);
     digitalWrite(LED_BUILTIN, HIGH);   // off (active-low)
 
     delay(1000);
@@ -1062,7 +703,7 @@ void loop()
       {
         lowBattery = true;
                 
-        setLedPinMode(INPUT_PULLDOWN);
+        LedOutput::setPinMode(INPUT_PULLDOWN);
         // pinMode(LED_BUILTIN, INPUT);   // off
         // #ifdef USE_PDM
         // PDM.end();
@@ -1094,15 +735,15 @@ void loop()
 
 #if ENABLE_NFC
     if (nfcEffectActive) {
-      fireflyActive = false;
+      fireflyEffect.reset();
       updateNfcEffect();
     } else
 #endif
     {
       if (activeLedMode == MODE_FIREFLY) {
-        updateFirefly(millis());
+        LedOutput::write(fireflyEffect.update(millis(), brightness));
       } else {
-        fireflyActive = false;
+        fireflyEffect.reset();
         if (audioBlockReady) {
           updateLEDs(audioBuffers[audioBufferIndex], audioSampleCount);
         }
@@ -1130,9 +771,24 @@ void loop()
         currentButtonMode != MODE_POWEROFF) {
       previousOnMode = currentButtonMode;
     }
-    updateButtons(millis());
-    if (buttonSystemOffRequested) {
-      requestButtonSystemOff();
+    switch (ButtonController::update(millis())) {
+      case ButtonAction::BrightnessUp:
+        changeBrightness(true);
+        break;
+      case ButtonAction::BrightnessDown:
+        changeBrightness(false);
+        break;
+      case ButtonAction::ToggleAeqConstant:
+        toggleAeqConstantMode();
+        break;
+      case ButtonAction::ToggleLedOutput:
+        toggleLedOutput();
+        break;
+      case ButtonAction::RequestSystemOff:
+        requestButtonSystemOff();
+        break;
+      case ButtonAction::None:
+        break;
     }
   }
   delay(2);
