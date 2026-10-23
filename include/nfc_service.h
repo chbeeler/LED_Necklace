@@ -1,11 +1,22 @@
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace NfcService {
 
+constexpr size_t MAX_URI_LENGTH = 120;
+
+// Loads the saved URI before BLE characteristics are initialized.
+void prepare();
+
 // Initializes the Type 2 tag on NFC builds. This is a no-op for normal builds.
 void begin();
+
+const char *uri();
+
+// Applies a validated HTTP(S) URI immediately and saves it across restarts.
+bool setUri(const char *newUri, size_t length);
 
 // Transfers an NFC-read event from interrupt context into the main loop.
 void update(uint32_t nowMs);

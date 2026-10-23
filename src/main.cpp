@@ -356,6 +356,7 @@ void setup() {
   //pinMode(PIN_BAT_EN, INPUT);
 
 #ifdef USE_BLE
+  NfcService::prepare();
   bleInit(brightness);     // your existing global brightness
 #endif
   NfcService::begin();

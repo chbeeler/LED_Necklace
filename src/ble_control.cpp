@@ -1,7 +1,12 @@
 #include "ble_control.h"
 #include "led_modes.h"
+#include "nfc_service.h"
 #include <Arduino.h>
 #include <nrf_soc.h>
+
+#ifndef ENABLE_NFC
+#define ENABLE_NFC 0
+#endif
 
 BLEUart bleuart;   // global
 
@@ -18,6 +23,9 @@ static BLECharacteristic filterCharacteristic("19B10100-E8F2-537E-4F6C-D104768A1
 static BLECharacteristic settingsStrCharacteristic("19B10110-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic volMinMaxCharacteristic("19B10120-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic aeqFilterCharacteristic("19B10130-E8F2-537E-4F6C-D104768A1214");
+#if ENABLE_NFC
+static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1214");
+#endif
 
 // ===================== Your config/state =====================
 #define SENSITIVITY_CONV_FACTOR   (0.0005f)
@@ -44,6 +52,9 @@ static volatile bool g_vbatThres_written = false;
 static volatile bool g_mode_written = false;
 static volatile bool g_settings_written = false;
 static volatile bool g_aeq_filter_written = false;
+#if ENABLE_NFC
+static volatile bool g_nfc_uri_written = false;
+#endif
 
 static volatile uint32_t g_brightness_u32 = 0;
 static volatile uint32_t g_sensitivity_u32 = 0;
@@ -54,6 +65,10 @@ static volatile uint8_t  g_mode_u8 = 0;
 static volatile uint32_t g_aeq_filter_u32 = 0;
 
 static char g_settings_buf[65]; // 64 + NUL
+#if ENABLE_NFC
+static char g_nfc_uri_buf[NfcService::MAX_URI_LENGTH + 1];
+static volatile uint16_t g_nfc_uri_length = 0;
+#endif
 
 // ===================== helpers =====================
 static uint32_t rd_u32_le(const uint8_t* d, uint16_t len)
@@ -141,6 +156,18 @@ static void cb_settings(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8
   g_settings_written = true;
 }
 
+#if ENABLE_NFC
+static void cb_nfc_uri(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/,
+                       uint8_t* data, uint16_t len)
+{
+  if (len > NfcService::MAX_URI_LENGTH) len = NfcService::MAX_URI_LENGTH;
+  memcpy(g_nfc_uri_buf, data, len);
+  g_nfc_uri_buf[len] = '\0';
+  g_nfc_uri_length = len;
+  g_nfc_uri_written = true;
+}
+#endif
+
 static void disconnectBle() {
   uint16_t connections = Bluefruit.connected();
   for (uint16_t conn = 0; conn < connections; conn++) {
@@ -171,6 +198,10 @@ void bleInit(uint16_t initialBrightness)
 {
   brightness = initialBrightness;
 
+#if ENABLE_NFC
+  // A 128-byte MTU carries the complete NFC URI in one acknowledged write.
+  Bluefruit.configPrphBandwidth(BANDWIDTH_HIGH);
+#endif
   Bluefruit.begin();
 
   Bluefruit.autoConnLed(false);   // disable the blinking connection LED
@@ -271,6 +302,16 @@ void bleInit(uint16_t initialBrightness)
   aeqFilterCharacteristic.setUserDescriptor("AEQ smoothing (0..255)");
   aeqFilterCharacteristic.begin();
 
+#if ENABLE_NFC
+  // NFC URI (UTF-8 HTTP(S) text), read/write on NFC-enabled hardware only.
+  nfcUriCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  nfcUriCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  nfcUriCharacteristic.setMaxLen(NfcService::MAX_URI_LENGTH);
+  nfcUriCharacteristic.setWriteCallback(cb_nfc_uri);
+  nfcUriCharacteristic.setUserDescriptor("NFC link (HTTP(S), max 120 bytes)");
+  nfcUriCharacteristic.begin();
+#endif
+
   // --- Initial values ---
   // NOTE: All u32 values are little-endian when written by apps/web
   brightnessCharacteristic.write32(brightness);
@@ -282,6 +323,10 @@ void bleInit(uint16_t initialBrightness)
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   vBatCharacteristic.write16(vbat_mV);
   bleSetVolMinMax(vol_min, vol_max);
+#if ENABLE_NFC
+  nfcUriCharacteristic.write((const uint8_t *)NfcService::uri(),
+                             strlen(NfcService::uri()));
+#endif
 
   writeSettingsString();
 
@@ -404,6 +449,19 @@ void bleUpdate()
       settings_dirty = true;
     }
   }
+
+#if ENABLE_NFC
+  if (g_nfc_uri_written) {
+    g_nfc_uri_written = false;
+    const uint16_t length = g_nfc_uri_length;
+    if (!NfcService::setUri(g_nfc_uri_buf, length)) {
+      Serial.println("Rejected NFC URI write");
+    }
+    const char *currentUri = NfcService::uri();
+    nfcUriCharacteristic.write((const uint8_t *)currentUri,
+                               strlen(currentUri));
+  }
+#endif
 
   if (settings_dirty) {
     writeSettingsString();
