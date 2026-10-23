@@ -445,6 +445,9 @@ void loop()
     if (audioResult.volumeRangeReady) {
       bleSetVolMinMax(audioResult.volumeMin, audioResult.volumeMax);
     }
+    if (audioResult.telemetryReady) {
+      bleSetAudioTelemetry(audioResult.telemetry);
+    }
 
     if (NfcService::effectActive()) {
       fireflyEffect.reset();

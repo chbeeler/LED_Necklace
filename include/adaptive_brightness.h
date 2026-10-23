@@ -18,6 +18,7 @@ public:
   float floor() const { return floor_; }
   float ceiling() const { return ceiling_; }
   float output() const { return output_; }
+  bool saturated() const { return saturated_; }
 
 private:
   static float smoothingCoefficient(float seconds, float dt);
@@ -29,4 +30,5 @@ private:
   float previousLevel_;
   float flash_;
   float output_;
+  bool saturated_;
 };

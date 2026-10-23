@@ -13,6 +13,8 @@ constexpr char CHANNEL_COUNT = 1;
 constexpr uint32_t SAMPLE_RATE_HZ = 16000UL;
 constexpr uint16_t BUFFER_SAMPLES = 512;
 constexpr uint32_t VOLUME_RANGE_WINDOW_MS = 5000UL;
+constexpr uint32_t TELEMETRY_WINDOW_MS = 200UL;
+constexpr uint16_t PCM_CLIP_THRESHOLD = 32700;
 
 // The ISR fills one buffer while the main loop owns the other. The PDM library
 // currently supplies 512-byte blocks; this capacity also tolerates larger
@@ -29,6 +31,14 @@ uint8_t previousLedMode = 0xFF;
 uint16_t volumeWindowMin = 0xFFFF;
 uint16_t volumeWindowMax = 0;
 uint32_t volumeWindowStartMs = 0;
+uint16_t telemetryRawPeak = 0;
+uint16_t telemetryRms = 0;
+uint32_t telemetryClippedSamples = 0;
+uint32_t telemetryTotalSamples = 0;
+uint16_t telemetrySaturatedBlocks = 0;
+uint16_t telemetryAeqBlocks = 0;
+uint32_t telemetryWindowStartMs = 0;
+uint32_t telemetryPreviousDroppedBlocks = 0;
 
 void onPdmData()
 {
@@ -75,6 +85,18 @@ uint16_t clampLoudness(float value)
   return (uint16_t)(value + 0.5f);
 }
 
+uint16_t normalizedToU16(float value)
+{
+  if (value <= 0.0f) return 0;
+  if (value >= 1.0f) return 32767;
+  return (uint16_t)(value * 32768.0f + 0.5f);
+}
+
+uint16_t clampCounter(uint32_t value)
+{
+  return value > 65535UL ? 65535 : (uint16_t)value;
+}
+
 }  // namespace
 
 namespace AudioEngine {
@@ -101,15 +123,26 @@ AudioResult update(const AudioSettings &settings, bool processBlock,
 
   const int16_t *samples = audioBuffers[bufferIndex];
   int32_t sumAbs = 0;
+  uint64_t sumSquares = 0;
+  uint16_t rawPeak = 0;
+  uint16_t clippedSamples = 0;
   for (uint16_t i = 0; i < sampleCount; ++i) {
     int32_t sample = samples[i];
-    if (sample < 0) sample = -sample;
-    sumAbs += sample;
+    int32_t absoluteSample = sample < 0 ? -sample : sample;
+    if (absoluteSample > 32767) absoluteSample = 32767;
+    sumAbs += absoluteSample;
+    sumSquares += (uint64_t)((int64_t)sample * (int64_t)sample);
+    if ((uint16_t)absoluteSample > rawPeak) rawPeak = (uint16_t)absoluteSample;
+    if (absoluteSample >= PCM_CLIP_THRESHOLD) ++clippedSamples;
   }
 
   const float averageLoudness = sampleCount > 0
                                     ? (float)sumAbs / (float)sampleCount
                                     : 0.0f;
+  const float rms = sampleCount > 0
+                        ? sqrtf((float)sumSquares / (float)sampleCount) /
+                              32768.0f
+                        : 0.0f;
   filteredLoudness +=
       settings.filterAlpha * (averageLoudness - filteredLoudness);
 
@@ -128,6 +161,7 @@ AudioResult update(const AudioSettings &settings, bool processBlock,
   }
 
   float ledValue = 0.0f;
+  bool aeqSaturated = false;
   if (settings.ledMode == MODE_AEQ) {
     const float adaptiveOutput = adaptiveBrightness.process(
         samples, sampleCount, SAMPLE_RATE_HZ, settings.sensitivity);
@@ -136,6 +170,8 @@ AudioResult update(const AudioSettings &settings, bool processBlock,
             ? settings.brightness
             : LedOutput::PWM_MAX;
     ledValue = adaptiveOutput * (float)brightnessLimit;
+    aeqSaturated = adaptiveBrightness.saturated() ||
+                   adaptiveBrightness.output() >= 0.995f;
   } else {
     float effectiveLoudness = filteredLoudness - settings.noiseFloor;
     if (effectiveLoudness < 0.0f) effectiveLoudness = 0.0f;
@@ -166,6 +202,45 @@ AudioResult update(const AudioSettings &settings, bool processBlock,
   if (nowMs > 500UL) {
     result.ledValueReady = true;
     result.ledValue = output;
+  }
+
+  if (telemetryWindowStartMs == 0) telemetryWindowStartMs = nowMs;
+  if (rawPeak > telemetryRawPeak) telemetryRawPeak = rawPeak;
+  telemetryRms = normalizedToU16(rms);
+  telemetryClippedSamples += clippedSamples;
+  telemetryTotalSamples += sampleCount;
+  if (settings.ledMode == MODE_AEQ) {
+    ++telemetryAeqBlocks;
+    if (aeqSaturated) ++telemetrySaturatedBlocks;
+  }
+
+  if ((uint32_t)(nowMs - telemetryWindowStartMs) >= TELEMETRY_WINDOW_MS) {
+    const uint32_t currentDroppedBlocks = droppedBlockCount();
+    result.telemetryReady = true;
+    result.telemetry.rawPeak = telemetryRawPeak;
+    result.telemetry.rms = telemetryRms;
+    if (telemetryAeqBlocks > 0) {
+      result.telemetry.envelope = normalizedToU16(adaptiveBrightness.envelope());
+      result.telemetry.floor = normalizedToU16(adaptiveBrightness.floor());
+      result.telemetry.ceiling = normalizedToU16(adaptiveBrightness.ceiling());
+      result.telemetry.output = normalizedToU16(adaptiveBrightness.output());
+    }
+    result.telemetry.clippedSamples = clampCounter(telemetryClippedSamples);
+    result.telemetry.totalSamples = clampCounter(telemetryTotalSamples);
+    result.telemetry.saturatedBlocks =
+        telemetrySaturatedBlocks > 255 ? 255 : (uint8_t)telemetrySaturatedBlocks;
+    result.telemetry.totalAeqBlocks =
+        telemetryAeqBlocks > 255 ? 255 : (uint8_t)telemetryAeqBlocks;
+    result.telemetry.droppedBlocks = clampCounter(
+        currentDroppedBlocks - telemetryPreviousDroppedBlocks);
+
+    telemetryRawPeak = 0;
+    telemetryClippedSamples = 0;
+    telemetryTotalSamples = 0;
+    telemetrySaturatedBlocks = 0;
+    telemetryAeqBlocks = 0;
+    telemetryWindowStartMs = nowMs;
+    telemetryPreviousDroppedBlocks = currentDroppedBlocks;
   }
   return result;
 }

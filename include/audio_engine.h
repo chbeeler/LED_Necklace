@@ -10,12 +10,28 @@ struct AudioSettings {
   float noiseFloor;
 };
 
+struct AudioTelemetry {
+  uint16_t rawPeak = 0;
+  uint16_t rms = 0;
+  uint16_t envelope = 0;
+  uint16_t floor = 0;
+  uint16_t ceiling = 0;
+  uint16_t output = 0;
+  uint16_t clippedSamples = 0;
+  uint16_t totalSamples = 0;
+  uint8_t saturatedBlocks = 0;
+  uint8_t totalAeqBlocks = 0;
+  uint16_t droppedBlocks = 0;
+};
+
 struct AudioResult {
   bool ledValueReady = false;
   uint16_t ledValue = 0;
   bool volumeRangeReady = false;
   uint16_t volumeMin = 0;
   uint16_t volumeMax = 0;
+  bool telemetryReady = false;
+  AudioTelemetry telemetry;
 };
 
 namespace AudioEngine {

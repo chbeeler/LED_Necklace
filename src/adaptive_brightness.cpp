@@ -15,6 +15,7 @@ void AdaptiveBrightness::reset()
   previousLevel_ = 0.0f;
   flash_ = 0.0f;
   output_ = 0.0f;
+  saturated_ = false;
 }
 
 float AdaptiveBrightness::smoothingCoefficient(float seconds, float dt)
@@ -65,8 +66,10 @@ float AdaptiveBrightness::process(const int16_t* samples,
 
   float span = ceiling_ - floor_;
   if (span < 0.003f) span = 0.003f;
-  float level = clamp01((envelope_ - floor_) / span);
-  level = clamp01(level * sensitivity);
+  const float normalizedLevel = (envelope_ - floor_) / span;
+  const float scaledLevel = clamp01(normalizedLevel) * sensitivity;
+  saturated_ = normalizedLevel >= 1.0f || scaledLevel >= 1.0f;
+  const float level = clamp01(scaledLevel);
 
   float onset = level - previousLevel_;
   if (onset < 0.0f) onset = 0.0f;

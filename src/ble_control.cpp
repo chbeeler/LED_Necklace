@@ -1,4 +1,5 @@
 #include "ble_control.h"
+#include "audio_engine.h"
 #include "led_modes.h"
 #include "nfc_service.h"
 #include <Arduino.h>
@@ -23,6 +24,7 @@ static BLECharacteristic filterCharacteristic("19B10100-E8F2-537E-4F6C-D104768A1
 static BLECharacteristic settingsStrCharacteristic("19B10110-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic volMinMaxCharacteristic("19B10120-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic aeqFilterCharacteristic("19B10130-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic audioTelemetryCharacteristic("19B10160-E8F2-537E-4F6C-D104768A1214");
 #if ENABLE_NFC
 static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1214");
 #endif
@@ -302,6 +304,13 @@ void bleInit(uint16_t initialBrightness)
   aeqFilterCharacteristic.setUserDescriptor("AEQ smoothing (0..255)");
   aeqFilterCharacteristic.begin();
 
+  // Audio diagnostics, 20-byte fixed packet, read/notify.
+  audioTelemetryCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_NOTIFY);
+  audioTelemetryCharacteristic.setPermission(SECMODE_OPEN, SECMODE_NO_ACCESS);
+  audioTelemetryCharacteristic.setFixedLen(20);
+  audioTelemetryCharacteristic.setUserDescriptor("Audio debug telemetry v1");
+  audioTelemetryCharacteristic.begin();
+
 #if ENABLE_NFC
   // NFC URI (UTF-8 HTTP(S) text), read/write on NFC-enabled hardware only.
   nfcUriCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
@@ -323,6 +332,8 @@ void bleInit(uint16_t initialBrightness)
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   vBatCharacteristic.write16(vbat_mV);
   bleSetVolMinMax(vol_min, vol_max);
+  AudioTelemetry emptyTelemetry;
+  bleSetAudioTelemetry(emptyTelemetry);
 #if ENABLE_NFC
   nfcUriCharacteristic.write((const uint8_t *)NfcService::uri(),
                              strlen(NfcService::uri()));
@@ -512,4 +523,32 @@ void bleSetVolMinMax(uint16_t min_val, uint16_t max_val)
   payload[2] = (uint8_t)(vol_max & 0xFF);
   payload[3] = (uint8_t)((vol_max >> 8) & 0xFF);
   volMinMaxCharacteristic.write(payload, sizeof(payload));
+}
+
+void bleSetAudioTelemetry(const AudioTelemetry &telemetry)
+{
+  uint8_t payload[20];
+  const uint16_t values[] = {
+    telemetry.rawPeak,
+    telemetry.rms,
+    telemetry.envelope,
+    telemetry.floor,
+    telemetry.ceiling,
+    telemetry.output,
+    telemetry.clippedSamples,
+    telemetry.totalSamples,
+  };
+  for (uint8_t i = 0; i < 8; ++i) {
+    payload[i * 2] = (uint8_t)(values[i] & 0xFF);
+    payload[i * 2 + 1] = (uint8_t)(values[i] >> 8);
+  }
+  payload[16] = telemetry.saturatedBlocks;
+  payload[17] = telemetry.totalAeqBlocks;
+  payload[18] = (uint8_t)(telemetry.droppedBlocks & 0xFF);
+  payload[19] = (uint8_t)(telemetry.droppedBlocks >> 8);
+
+  audioTelemetryCharacteristic.write(payload, sizeof(payload));
+  if (Bluefruit.connected()) {
+    audioTelemetryCharacteristic.notify(payload, sizeof(payload));
+  }
 }

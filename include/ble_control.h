@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <bluefruit.h>
 
+struct AudioTelemetry;
+
 void bleInit(uint16_t initialBrightness);
 void bleUpdate();
 void ble_sleep();
@@ -16,3 +18,4 @@ float bleGetSensitivity();
 float bleGetNoiseFloor();
 float bleGetAeqFilterAlpha();
 void bleSetVolMinMax(uint16_t vol_min, uint16_t vol_max);
+void bleSetAudioTelemetry(const AudioTelemetry &telemetry);
