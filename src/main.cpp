@@ -36,6 +36,14 @@ extern "C" {
 #define BUTTON_2_DRIVE_PIN      D4
 #define BUTTON_2_SENSE_PIN      D6
 #define BUTTON_DEBOUNCE_MS      25UL
+#define BUTTON_LONG_PRESS_MS    1500UL
+#define BUTTON_SYSTEM_OFF_MAGIC 0xB1
+
+static const uint16_t BRIGHTNESS_LEVELS[] = {
+  5, 10, 20, 30, 50, 70, 100, 150, 250, 400
+};
+static const size_t BRIGHTNESS_LEVEL_COUNT =
+    sizeof(BRIGHTNESS_LEVELS) / sizeof(BRIGHTNESS_LEVELS[0]);
 
 // Firefly cycle timing.
 #define FIREFLY_FADE_IN_MS       350UL
@@ -159,11 +167,18 @@ struct ButtonState {
   bool rawPressed;
   bool stablePressed;
   uint32_t rawChangedMs;
+  uint32_t pressedMs;
 };
 
-static ButtonState button1State = {false, false, 0};
-static ButtonState button2State = {false, false, 0};
-static bool bothButtonsPressed = false;
+static ButtonState button1State = {false, false, 0, 0};
+static ButtonState button2State = {false, false, 0, 0};
+static bool plusLongHandled = false;
+static bool minusLongHandled = false;
+static bool chordActive = false;
+static bool chordHandled = false;
+static uint32_t chordStartedMs = 0;
+static bool buttonSystemOffRequested = false;
+static uint8_t previousOnMode = MODE_AEQ;
 
 #if ENABLE_NFC
 static const uint32_t NFC_EFFECT_DURATION_MS = 4000UL;
@@ -328,29 +343,148 @@ static void updateButton(ButtonState &state,
       (uint32_t)(nowMs - state.rawChangedMs) >= BUTTON_DEBOUNCE_MS) {
     state.stablePressed = state.rawPressed;
     if (state.stablePressed) {
+      state.pressedMs = nowMs;
       Serial.print(name);
       Serial.println(" pressed");
     }
   }
 }
 
+static void changeBrightness(bool increase)
+{
+  const uint16_t current = bleGetBrightness();
+  uint16_t next = current;
+
+  if (increase) {
+    for (size_t i = 0; i < BRIGHTNESS_LEVEL_COUNT; ++i) {
+      if (BRIGHTNESS_LEVELS[i] > current) {
+        next = BRIGHTNESS_LEVELS[i];
+        break;
+      }
+    }
+  } else {
+    for (size_t i = BRIGHTNESS_LEVEL_COUNT; i > 0; --i) {
+      if (BRIGHTNESS_LEVELS[i - 1] < current) {
+        next = BRIGHTNESS_LEVELS[i - 1];
+        break;
+      }
+    }
+  }
+
+  if (next == current) return;
+  bleSetBrightnessFromButtons(next);
+  brightness = next;
+  Serial.print("Brightness: ");
+  Serial.println(next);
+}
+
+static void toggleAeqConstantMode()
+{
+  const uint8_t currentMode = getLedMode();
+  if (currentMode == MODE_OFF) {
+    Serial.println("Plus long press ignored while LEDs are off");
+    return;
+  }
+
+  const uint8_t nextMode =
+      currentMode == MODE_AEQ ? MODE_CONSTANT : MODE_AEQ;
+  previousOnMode = nextMode;
+  bleSetModeFromButtons(nextMode);
+  Serial.println(nextMode == MODE_AEQ ? "LED mode: AEQ" :
+                                       "LED mode: constant");
+}
+
+static void toggleLedOutput()
+{
+  const uint8_t currentMode = getLedMode();
+  if (currentMode == MODE_OFF) {
+    if (previousOnMode == MODE_OFF || previousOnMode == MODE_POWEROFF) {
+      previousOnMode = MODE_AEQ;
+    }
+    bleSetModeFromButtons(previousOnMode);
+    Serial.println("LED output: on");
+  } else {
+    previousOnMode = currentMode;
+    bleSetModeFromButtons(MODE_OFF);
+    writeLedPwm(0);
+    Serial.println("LED output: off");
+  }
+}
+
 static void updateButtons(uint32_t nowMs)
 {
+  const bool plusWasPressed = button1State.stablePressed;
+  const bool minusWasPressed = button2State.stablePressed;
+
   updateButton(button1State,
                digitalRead(BUTTON_1_SENSE_PIN) == HIGH,
                nowMs,
-               "Button 1 (D7-D9)");
+               "Plus (D7-D9)");
   updateButton(button2State,
                digitalRead(BUTTON_2_SENSE_PIN) == HIGH,
                nowMs,
-               "Button 2 (D4-D6)");
+               "Minus (D4-D6)");
 
-  bool bothPressedNow = button1State.stablePressed &&
-                        button2State.stablePressed;
-  if (bothPressedNow && !bothButtonsPressed) {
-    Serial.println("WARNING: both buttons are pressed at the same time");
+  const bool plusPressed = button1State.stablePressed;
+  const bool minusPressed = button2State.stablePressed;
+
+  if (!plusWasPressed && plusPressed) plusLongHandled = false;
+  if (!minusWasPressed && minusPressed) minusLongHandled = false;
+
+  if (plusPressed && minusPressed) {
+    if (!chordActive) {
+      chordActive = true;
+      chordHandled = false;
+      chordStartedMs = nowMs;
+      // A chord always takes priority over both individual gestures.
+      plusLongHandled = true;
+      minusLongHandled = true;
+    }
+
+    if (!chordHandled &&
+        (uint32_t)(nowMs - chordStartedMs) >= BUTTON_LONG_PRESS_MS) {
+      chordHandled = true;
+      buttonSystemOffRequested = true;
+      Serial.println("Both buttons held: system off requested");
+    }
+    return;
   }
-  bothButtonsPressed = bothPressedNow;
+
+  // Once a chord starts, suppress all individual actions until both buttons
+  // have been released.
+  if (chordActive) {
+    if (!plusPressed && !minusPressed) {
+      chordActive = false;
+      chordHandled = false;
+      plusLongHandled = false;
+      minusLongHandled = false;
+    }
+    return;
+  }
+
+  if (plusPressed && !plusLongHandled &&
+      (uint32_t)(nowMs - button1State.pressedMs) >= BUTTON_LONG_PRESS_MS) {
+    plusLongHandled = true;
+    toggleAeqConstantMode();
+  }
+
+  if (minusPressed && !minusLongHandled &&
+      (uint32_t)(nowMs - button2State.pressedMs) >= BUTTON_LONG_PRESS_MS) {
+    minusLongHandled = true;
+    toggleLedOutput();
+  }
+
+  // Short actions happen on release, so a long press never also changes the
+  // brightness preset.
+  if (plusWasPressed && !plusPressed) {
+    if (!plusLongHandled) changeBrightness(true);
+    plusLongHandled = false;
+  }
+
+  if (minusWasPressed && !minusPressed) {
+    if (!minusLongHandled) changeBrightness(false);
+    minusLongHandled = false;
+  }
 }
 #if ENABLE_NFC
 static const uint8_t NFC_URI_PREFIX = 0x04; // "https://"
@@ -448,6 +582,99 @@ bool deepPowerDown(Adafruit_SPIFlash& flash, Adafruit_FlashTransport& transport)
   uint32_t id_after = flash.getJEDECID();
 
   return (id_after == 0xFFFFFF || id_after == 0xFFFFFFFF);
+}
+
+static void configureButtonWakeSources()
+{
+  digitalWrite(BUTTON_1_DRIVE_PIN, HIGH);
+  pinMode(BUTTON_1_DRIVE_PIN, OUTPUT);
+  digitalWrite(BUTTON_2_DRIVE_PIN, HIGH);
+  pinMode(BUTTON_2_DRIVE_PIN, OUTPUT);
+
+  // Either button may wake the MCU electrically. Firmware then requires the
+  // complete two-button hold before it finishes booting.
+  pinMode(BUTTON_1_SENSE_PIN, INPUT_PULLDOWN_SENSE);
+  pinMode(BUTTON_2_SENSE_PIN, INPUT_PULLDOWN_SENSE);
+}
+
+static void enterButtonSystemOff(bool servicesRunning)
+{
+  writeLedPwm(0);
+  setLedPinMode(INPUT_PULLDOWN);
+
+  // Entering SYSTEMOFF while a wake input is already active would cause an
+  // immediate reboot, so wait for the shutdown chord to be released first.
+  while (digitalRead(BUTTON_1_SENSE_PIN) == HIGH ||
+         digitalRead(BUTTON_2_SENSE_PIN) == HIGH) {
+    delay(5);
+  }
+  delay(BUTTON_DEBOUNCE_MS);
+
+  if (servicesRunning) {
+#ifdef USE_PDM
+    PDM.end();
+#endif
+#ifdef USE_BLE
+    ble_sleep();
+#endif
+
+    flash.begin();
+    if (!deepPowerDown(flash, flashTransport)) {
+      Serial.println("Flash deep power-down failed");
+    }
+    flash.end();
+  }
+
+  NRF_POWER->GPREGRET = BUTTON_SYSTEM_OFF_MAGIC;
+  configureButtonWakeSources();
+  __DSB();
+  __ISB();
+  sd_power_system_off();
+
+  while (1) yield();
+}
+
+static void waitForButtonPowerOn()
+{
+  Serial.println("System off: hold Plus and Minus for 1.5 seconds to power on");
+  uint32_t bothPressedSinceMs = 0;
+  uint32_t bothReleasedSinceMs = 0;
+
+  while (true) {
+    const uint32_t nowMs = millis();
+    const bool plusPressed = digitalRead(BUTTON_1_SENSE_PIN) == HIGH;
+    const bool minusPressed = digitalRead(BUTTON_2_SENSE_PIN) == HIGH;
+
+    if (plusPressed && minusPressed) {
+      bothReleasedSinceMs = 0;
+      if (bothPressedSinceMs == 0) bothPressedSinceMs = nowMs;
+      if ((uint32_t)(nowMs - bothPressedSinceMs) >= BUTTON_LONG_PRESS_MS) {
+        Serial.println("Power-on gesture accepted");
+        NRF_POWER->GPREGRET = 0;
+
+        // Do not let the same hold become a new shutdown chord after setup.
+        while (digitalRead(BUTTON_1_SENSE_PIN) == HIGH ||
+               digitalRead(BUTTON_2_SENSE_PIN) == HIGH) {
+          delay(5);
+        }
+        delay(BUTTON_DEBOUNCE_MS);
+        return;
+      }
+    } else {
+      bothPressedSinceMs = 0;
+      if (!plusPressed && !minusPressed) {
+        if (bothReleasedSinceMs == 0) bothReleasedSinceMs = nowMs;
+        if ((uint32_t)(nowMs - bothReleasedSinceMs) >= 250UL) {
+          // A single/accidental wake was released without completing the
+          // power-on chord. Return to SYSTEMOFF with the marker intact.
+          enterButtonSystemOff(false);
+        }
+      } else {
+        bothReleasedSinceMs = 0;
+      }
+    }
+    delay(5);
+  }
 }
 
 void setupWakeUpInterrupt()
@@ -597,6 +824,12 @@ void shutdownISR()
 }
 
 void setup() {
+  if (NRF_POWER->GPREGRET == BUTTON_SYSTEM_OFF_MAGIC) {
+    Serial.begin(115200);
+    setupButtons();
+    waitForButtonPowerOn();
+  }
+
   // If a low-battery reset was requested, enter SYSTEMOFF only when USB is
   // still absent.  Connecting USB must always allow the device to boot, even
   // when no battery is installed or a previous boot set the reset marker.
@@ -817,7 +1050,15 @@ void loop()
       bleSetVBat_mV(getBatteryVoltage_mV());
     }
 #endif
+    const uint8_t currentButtonMode = getLedMode();
+    if (currentButtonMode != MODE_OFF &&
+        currentButtonMode != MODE_POWEROFF) {
+      previousOnMode = currentButtonMode;
+    }
     updateButtons(millis());
+    if (buttonSystemOffRequested) {
+      enterButtonSystemOff(true);
+    }
   }
   delay(2);
 }

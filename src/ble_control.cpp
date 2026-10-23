@@ -416,6 +416,21 @@ void bleUpdate()
 }
 
 uint16_t bleGetBrightness()         { return brightness; }
+void bleSetBrightnessFromButtons(uint16_t value)
+{
+  if (value > 4095) value = 4095;
+  brightness = value;
+  brightnessCharacteristic.write32(brightness);
+  writeSettingsString();
+}
+
+void bleSetModeFromButtons(uint8_t mode)
+{
+  ledMode = mode;
+  debugCharacteristic.write8(ledMode);
+  writeSettingsString();
+}
+
 float    bleGetSensitivity()        { return sensitivityF; }
 float    bleGetVbatThres()          { return vbatThres; }
 uint8_t  getLedMode()               { return ledMode; }
