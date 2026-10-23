@@ -1,16 +1,6 @@
 #include <Arduino.h>
 //#include "board_pins.h"
 
-#ifndef ENABLE_NFC
-#define ENABLE_NFC 0
-#endif
-
-#if ENABLE_NFC
-extern "C" {
-#include "nfc_t2t_lib.h"
-}
-#endif
-
 #include "battery.h"
 #include "ble_control.h"
 #include "audio_engine.h"
@@ -18,12 +8,11 @@ extern "C" {
 #include "firefly_effect.h"
 #include "led_modes.h"
 #include "led_output.h"
+#include "nfc_service.h"
 
 #include <Adafruit_SPIFlash.h>
 #include <LSM6DS3.h>
 #include <bluefruit.h>
-#include <math.h>
-#include <string.h>
 //#include <nrf52840.h>
 
 #define USE_BLE
@@ -50,22 +39,11 @@ int brightness = 100;
 float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune this)
 bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
-#if ENABLE_NFC
-volatile bool nfcEffectTrigger = false;
-bool nfcEffectActive = false;
-uint32_t nfcEffectStartMs = 0;
-#endif
 uint32_t lastBleCtrlUpdateMs = 0;
 uint32_t lastBleVbatUpdateMs = 0;
 
 static uint8_t previousOnMode = MODE_AEQ;
 
-#if ENABLE_NFC
-static const uint32_t NFC_EFFECT_DURATION_MS = 4000UL;
-static const float NFC_EFFECT_FREQUENCY_HZ = 0.8f;
-static const int NFC_EFFECT_MIN = 5;
-static const int NFC_EFFECT_MAX = 250;
-#endif
 static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
 
@@ -131,84 +109,6 @@ static void toggleLedOutput()
     Serial.println("LED output: off");
   }
 }
-
-#if ENABLE_NFC
-static const uint8_t NFC_URI_PREFIX = 0x04; // "https://"
-static const char NFC_URI_TEXT[] = "wa.me/41774321412?text=Hey%20Chris%2C%20cool%20necklace%21";
-
-static bool buildNdefUriRecord(const char *uri_text,
-                               uint8_t uri_prefix,
-                               uint8_t *out_buf,
-                               size_t out_buf_size,
-                               size_t *out_len)
-{
-  if ((uri_text == nullptr) || (out_buf == nullptr) || (out_len == nullptr)) {
-    return false;
-  }
-
-  size_t uri_len = strlen(uri_text);
-  if ((uri_len == 0U) || ((uri_len + 1U) > 255U)) {
-    return false;
-  }
-
-  size_t record_len = 5U + uri_len;
-  if (record_len > out_buf_size) {
-    return false;
-  }
-
-  // NDEF short record: MB|ME|SR, TNF=well-known, type='U' (URI)
-  out_buf[0] = 0xD1;
-  out_buf[1] = 0x01;
-  out_buf[2] = (uint8_t)(uri_len + 1U); // +1 for URI prefix byte
-  out_buf[3] = 0x55;                     // 'U'
-  out_buf[4] = uri_prefix;
-  memcpy(&out_buf[5], uri_text, uri_len);
-
-  *out_len = record_len;
-  return true;
-}
-
-static bool nfc_rc_ok(int rc)
-{
-  return (rc == 0) || ((uint32_t)rc == 0x0BAD0000UL);
-}
-
-static void updateNfcEffect()
-{
-  uint32_t elapsed_ms = millis() - nfcEffectStartMs;
-  if (elapsed_ms >= NFC_EFFECT_DURATION_MS) {
-    nfcEffectActive = false;
-    return;
-  }
-
-  float t_sec = (float)elapsed_ms / 1000.0f;
-  float phase = 2.0f * PI * NFC_EFFECT_FREQUENCY_HZ * t_sec;
-  float wave = 0.5f * (sinf(phase) + 1.0f);
-  int ledValue = NFC_EFFECT_MIN + (int)((float)(NFC_EFFECT_MAX - NFC_EFFECT_MIN) * wave);
-
-  if (ledValue < 0) {
-    ledValue = 0;
-  } else if (ledValue > (int)LedOutput::PWM_MAX) {
-    ledValue = LedOutput::PWM_MAX;
-  }
-
-  LedOutput::write(ledValue);
-}
-
-#endif
-
-#if ENABLE_NFC
-static void nfc_cb(void *context, nfc_t2t_event_t event, const uint8_t *data, size_t data_length)
-{
-  (void)context;
-  (void)data;
-  (void)data_length;
-
-  if (event == NFC_T2T_EVENT_DATA_READ) {
-    nfcEffectTrigger = true;
-  }
-}
-#endif
 
 Adafruit_FlashTransport_QSPI flashTransport;
 Adafruit_SPIFlash flash(&flashTransport);
@@ -458,25 +358,7 @@ void setup() {
 #ifdef USE_BLE
   bleInit(brightness);     // your existing global brightness
 #endif
-
-#if ENABLE_NFC
-  // NFC Type 2 Tag setup
-  int nfc_err = nfc_t2t_setup(nfc_cb, nullptr);
-  if (nfc_rc_ok(nfc_err)) {
-    // nfc_t2t_payload_set expects an NDEF payload buffer in RAM.
-    static uint8_t ndef_msg[260];
-    size_t ndef_len = 0;
-
-    if (buildNdefUriRecord(NFC_URI_TEXT, NFC_URI_PREFIX, ndef_msg, sizeof(ndef_msg), &ndef_len)) {
-      nfc_err = nfc_t2t_payload_set(ndef_msg, ndef_len);
-      if (nfc_rc_ok(nfc_err)) {
-        nfc_err = nfc_t2t_emulation_start();
-      }
-    } else {
-      Serial.println("NFC URI build failed");
-    }
-  }
-#endif
+  NfcService::begin();
 }
 
 void loop() 
@@ -499,13 +381,7 @@ void loop()
     shutdownIrqSeen = false;
   }
 
-#if ENABLE_NFC
-  if (nfcEffectTrigger) {
-    nfcEffectTrigger = false;
-    nfcEffectActive = true;
-    nfcEffectStartMs = millis();
-  }
-#endif
+  NfcService::update(millis());
 
   if(lowPowerTest)
   {
@@ -553,10 +429,8 @@ void loop()
   if (!low_power_condition)
   {
     const uint8_t activeLedMode = getLedMode();
-    bool effectOwnsLeds = activeLedMode == MODE_FIREFLY;
-#if ENABLE_NFC
-    effectOwnsLeds = effectOwnsLeds || nfcEffectActive;
-#endif
+    const bool effectOwnsLeds =
+        activeLedMode == MODE_FIREFLY || NfcService::effectActive();
 
     const AudioSettings audioSettings = {
       activeLedMode,
@@ -571,13 +445,13 @@ void loop()
       bleSetVolMinMax(audioResult.volumeMin, audioResult.volumeMax);
     }
 
-#if ENABLE_NFC
-    if (nfcEffectActive) {
+    if (NfcService::effectActive()) {
       fireflyEffect.reset();
-      updateNfcEffect();
-    } else
-#endif
-    {
+      uint16_t nfcBrightness = 0;
+      if (NfcService::renderEffect(millis(), nfcBrightness)) {
+        LedOutput::write(nfcBrightness);
+      }
+    } else {
       if (activeLedMode == MODE_FIREFLY) {
         LedOutput::write(fireflyEffect.update(millis(), brightness));
       } else {
