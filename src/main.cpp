@@ -625,6 +625,24 @@ static void configureButtonWakeSources()
   NRF_P1->LATCH = 0xFFFFFFFFUL;
 }
 
+static void setDiagnosticLed(bool on)
+{
+  // The XIAO's onboard LED is active-low.
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, on ? LOW : HIGH);
+}
+
+static void blinkDiagnosticLed(uint8_t count, uint16_t onMs = 120,
+                               uint16_t offMs = 120)
+{
+  for (uint8_t i = 0; i < count; ++i) {
+    setDiagnosticLed(true);
+    delay(onMs);
+    setDiagnosticLed(false);
+    delay(offMs);
+  }
+}
+
 static bool waitForButtonPowerOnGesture()
 {
   uint32_t bothPressedSinceMs = 0;
@@ -636,6 +654,16 @@ static bool waitForButtonPowerOnGesture()
     const bool minusPressed = digitalRead(BUTTON_2_SENSE_PIN) == HIGH;
     const uint32_t nowMs = millis();
 
+    // Wake-gate diagnostics on the onboard LED:
+    //   one button = blinking, both buttons = solid, neither = off.
+    if (plusPressed && minusPressed) {
+      setDiagnosticLed(true);
+    } else if (plusPressed || minusPressed) {
+      setDiagnosticLed(((nowMs / 200UL) & 1UL) != 0);
+    } else {
+      setDiagnosticLed(false);
+    }
+
     if (plusPressed && minusPressed) {
       bothReleasedSinceMs = 0;
       if (bothPressedSinceMs == 0) {
@@ -643,6 +671,8 @@ static bool waitForButtonPowerOnGesture()
       } else if ((uint32_t)(nowMs - bothPressedSinceMs) >=
                  BUTTON_LONG_PRESS_MS) {
         Serial.println("Both buttons held: powering on");
+        setDiagnosticLed(false);
+        blinkDiagnosticLed(3, 80, 80);
         return true;
       }
     } else {
@@ -832,19 +862,42 @@ void shutdownISR()
 }
 
 void setup() {
+  const uint32_t resetReason = NRF_POWER->RESETREAS;
+  const uint8_t retainedMarker = (uint8_t)NRF_POWER->GPREGRET;
+  NRF_POWER->RESETREAS = resetReason;
+
+  // One early flash means setup really was reached after SYSTEMOFF with the
+  // expected marker. Four flashes mean SYSTEMOFF reset occurred but the
+  // marker was missing or changed (for example by an earlier boot stage).
+  if ((resetReason & POWER_RESETREAS_OFF_Msk) != 0) {
+    blinkDiagnosticLed(retainedMarker == BUTTON_WAKE_MAGIC ? 1 : 4);
+  }
+
   // A GPIO event can wake SYSTEMOFF on either button. Do not perform normal
   // startup until both buttons have been held for the intended power gesture.
-  if (NRF_POWER->GPREGRET == BUTTON_WAKE_MAGIC)
+  if (retainedMarker == BUTTON_WAKE_MAGIC)
   {
     Serial.begin(115200);
-    setupButtons();
+    Serial.print("SYSTEMOFF wake; RESETREAS=0x");
+    Serial.print(resetReason, HEX);
+    Serial.print(", GPREGRET=0x");
+    Serial.println(retainedMarker, HEX);
 
-    if (!waitForButtonPowerOnGesture()) {
-      resetIntoSystemOffPath();
+    if (vbusConnected()) {
+      // USB is an independent nRF52840 SYSTEMOFF wake source and remains the
+      // recovery/development path: connecting it always permits normal boot.
+      Serial.println("USB wake: bypassing button power-on gate");
+      blinkDiagnosticLed(2, 80, 80);
+    } else {
+      setupButtons();
+      if (!waitForButtonPowerOnGesture()) {
+        setDiagnosticLed(false);
+        resetIntoSystemOffPath();
+      }
+      waitForButtonsReleased();
     }
 
     NRF_POWER->GPREGRET = 0;
-    waitForButtonsReleased();
   }
 
   // If a low-battery reset was requested, enter SYSTEMOFF only when USB is
@@ -870,7 +923,10 @@ void setup() {
       setupButtons();
       waitForButtonsReleased();
       configureButtonWakeSources();
-      NRF_POWER->GPREGRET = BUTTON_WAKE_MAGIC;
+      // Bluefruit has enabled the SoftDevice, so use its API for the retained
+      // marker instead of writing the protected POWER register directly.
+      sd_power_gpregret_clr(0, 0xFF);
+      sd_power_gpregret_set(0, BUTTON_WAKE_MAGIC);
       __DSB();
       __ISB();
       sd_power_system_off();
