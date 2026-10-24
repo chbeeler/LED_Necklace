@@ -34,7 +34,7 @@ static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1
 
 static uint16_t brightness = 100;
 static float    sensitivityF = 0.5f;
-static uint8_t  ledMode = 1;
+static uint8_t  ledMode = MODE_AEQ;
 static float    filter_alpha = 0.15f;
 static float    aeq_filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;

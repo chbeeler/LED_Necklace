@@ -7,7 +7,6 @@ enum class ButtonAction : uint8_t {
   BrightnessUp,
   BrightnessDown,
   ToggleAeqConstant,
-  ToggleLedOutput,
   RequestSystemOff,
 };
 

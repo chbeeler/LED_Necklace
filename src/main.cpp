@@ -22,7 +22,7 @@
 #define SYSTEM_OFF_MAGIC        0xA7
 
 static const uint16_t BRIGHTNESS_LEVELS[] = {
-  5, 10, 20, 30, 50, 70, 100, 150, 250, 400
+  0, 5, 10, 20, 30, 50, 70, 100, 150, 250, 400
 };
 static const size_t BRIGHTNESS_LEVEL_COUNT =
     sizeof(BRIGHTNESS_LEVELS) / sizeof(BRIGHTNESS_LEVELS[0]);
@@ -41,8 +41,6 @@ bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
 uint32_t lastBleCtrlUpdateMs = 0;
 uint32_t lastBleVbatUpdateMs = 0;
-
-static uint8_t previousOnMode = MODE_AEQ;
 
 static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
@@ -87,27 +85,9 @@ static void toggleAeqConstantMode()
 
   const uint8_t nextMode =
       currentMode == MODE_AEQ ? MODE_CONSTANT : MODE_AEQ;
-  previousOnMode = nextMode;
   bleSetModeFromButtons(nextMode);
   Serial.println(nextMode == MODE_AEQ ? "LED mode: AEQ" :
                                        "LED mode: constant");
-}
-
-static void toggleLedOutput()
-{
-  const uint8_t currentMode = getLedMode();
-  if (currentMode == MODE_OFF) {
-    if (previousOnMode == MODE_OFF || previousOnMode == MODE_POWEROFF) {
-      previousOnMode = MODE_AEQ;
-    }
-    bleSetModeFromButtons(previousOnMode);
-    Serial.println("LED output: on");
-  } else {
-    previousOnMode = currentMode;
-    bleSetModeFromButtons(MODE_OFF);
-    LedOutput::write(0);
-    Serial.println("LED output: off");
-  }
 }
 
 Adafruit_FlashTransport_QSPI flashTransport;
@@ -482,11 +462,6 @@ void loop()
       bleSetVBat_mV(getBatteryVoltage_mV());
     }
 #endif
-    const uint8_t currentButtonMode = getLedMode();
-    if (currentButtonMode != MODE_OFF &&
-        currentButtonMode != MODE_POWEROFF) {
-      previousOnMode = currentButtonMode;
-    }
     switch (ButtonController::update(millis())) {
       case ButtonAction::BrightnessUp:
         changeBrightness(true);
@@ -496,9 +471,6 @@ void loop()
         break;
       case ButtonAction::ToggleAeqConstant:
         toggleAeqConstantMode();
-        break;
-      case ButtonAction::ToggleLedOutput:
-        toggleLedOutput();
         break;
       case ButtonAction::RequestSystemOff:
         requestButtonSystemOff();

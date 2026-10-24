@@ -120,12 +120,6 @@ ButtonAction update(uint32_t nowMs)
     return ButtonAction::ToggleAeqConstant;
   }
 
-  if (minusPressed && !minusLongHandled &&
-      (uint32_t)(nowMs - minusState.pressedMs) >= LONG_PRESS_MS) {
-    minusLongHandled = true;
-    return ButtonAction::ToggleLedOutput;
-  }
-
   if (plusWasPressed && !plusPressed) {
     const bool wasLongPress = plusLongHandled;
     plusLongHandled = false;
