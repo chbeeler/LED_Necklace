@@ -34,8 +34,9 @@ float AdaptiveBrightness::clamp01(float value)
 float AdaptiveBrightness::process(const int16_t* samples,
                                   size_t sampleCount,
                                   uint32_t sampleRate,
-                                  float sensitivity,
-                                  float noiseFloor)
+                                  float noiseFloor,
+                                  float releaseSeconds,
+                                  float idleLevel)
 {
   if (samples == nullptr || sampleCount == 0 || sampleRate == 0) {
     return output_;
@@ -51,9 +52,12 @@ float AdaptiveBrightness::process(const int16_t* samples,
   const float dt = (float)sampleCount / (float)sampleRate;
   const float rms = sqrtf(sumSquares / (float)sampleCount + 1.0e-12f);
 
+  if (releaseSeconds < 0.020f) releaseSeconds = 0.020f;
+  if (releaseSeconds > 0.500f) releaseSeconds = 0.500f;
+
   // Follow musical attacks quickly, but retain enough release time for a
   // visible pulse rather than tracking individual waveform cycles.
-  const float envelopeTau = rms > envelope_ ? 0.020f : 0.130f;
+  const float envelopeTau = rms > envelope_ ? 0.020f : releaseSeconds;
   envelope_ += smoothingCoefficient(envelopeTau, dt) * (rms - envelope_);
 
   // The slow envelope represents the current music level. Subtracting it
@@ -86,14 +90,7 @@ float AdaptiveBrightness::process(const int16_t* samples,
     beat = clamp01(modulation / modulationPeak_);
   }
 
-  // The existing EQ sensitivity control acts as AEQ contrast for now. Its app
-  // maximum is 0.5 in firmware, so map that to full contrast. Reduced contrast
-  // raises the between-beat brightness while strong beats still reach 100%.
-  const float contrast = clamp01(sensitivity * 2.0f);
-  const float fullContrastFloor = 0.10f;
-  const float betweenBeatLevel =
-      fullContrastFloor + (1.0f - contrast) *
-                              (1.0f - fullContrastFloor);
+  const float betweenBeatLevel = clamp01(idleLevel);
   const float shapedBeat = powf(beat, 1.5f);
   // AEQ always retains its between-beat level. The signal gate suppresses
   // false pulses in quiet conditions, but never switches the baseline off.
@@ -104,7 +101,7 @@ float AdaptiveBrightness::process(const int16_t* samples,
   ceiling_ = baseline_ + modulationPeak_;
   saturated_ = beatActive && target >= 0.995f;
 
-  const float outputTau = target > output_ ? 0.018f : 0.130f;
+  const float outputTau = target > output_ ? 0.018f : releaseSeconds;
   output_ += smoothingCoefficient(outputTau, dt) * (target - output_);
   output_ = clamp01(output_);
   return output_;

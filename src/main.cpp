@@ -419,6 +419,8 @@ void loop()
       sensitivityF,
       getFilterAlpha(),
       bleGetNoiseFloor(),
+      bleGetAeqReleaseMs(),
+      bleGetAeqIdlePercent(),
     };
     const AudioResult audioResult =
         AudioEngine::update(audioSettings, !effectOwnsLeds, millis());

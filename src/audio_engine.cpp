@@ -164,8 +164,9 @@ AudioResult update(const AudioSettings &settings, bool processBlock,
   bool aeqSaturated = false;
   if (settings.ledMode == MODE_AEQ) {
     const float adaptiveOutput = adaptiveBrightness.process(
-        samples, sampleCount, SAMPLE_RATE_HZ, settings.sensitivity,
-        settings.noiseFloor);
+        samples, sampleCount, SAMPLE_RATE_HZ, settings.noiseFloor,
+        (float)settings.aeqReleaseMs / 1000.0f,
+        (float)settings.aeqIdlePercent / 100.0f);
     const uint16_t brightnessLimit =
         settings.brightness < LedOutput::PWM_MAX
             ? settings.brightness

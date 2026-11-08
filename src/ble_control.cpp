@@ -25,6 +25,8 @@ static BLECharacteristic settingsStrCharacteristic("19B10110-E8F2-537E-4F6C-D104
 static BLECharacteristic volMinMaxCharacteristic("19B10120-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic aeqFilterCharacteristic("19B10130-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic audioTelemetryCharacteristic("19B10160-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic aeqReleaseCharacteristic("19B10170-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic aeqIdleCharacteristic("19B10180-E8F2-537E-4F6C-D104768A1214");
 #if ENABLE_NFC
 static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1214");
 #endif
@@ -38,6 +40,8 @@ static uint8_t  ledMode = MODE_AEQ;
 static float    filter_alpha = 0.15f;
 static float    aeq_filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;
+static uint16_t aeq_release_ms = 130;
+static uint8_t  aeq_idle_percent = 0;
 static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
 static uint16_t vol_min      = 0;
@@ -54,6 +58,8 @@ static volatile bool g_vbatThres_written = false;
 static volatile bool g_mode_written = false;
 static volatile bool g_settings_written = false;
 static volatile bool g_aeq_filter_written = false;
+static volatile bool g_aeq_release_written = false;
+static volatile bool g_aeq_idle_written = false;
 #if ENABLE_NFC
 static volatile bool g_nfc_uri_written = false;
 #endif
@@ -65,6 +71,8 @@ static volatile uint32_t g_filter_u32 = 0;
 static volatile uint32_t g_vbatThres_u32 = 0;
 static volatile uint8_t  g_mode_u8 = 0;
 static volatile uint32_t g_aeq_filter_u32 = 0;
+static volatile uint32_t g_aeq_release_u32 = 0;
+static volatile uint32_t g_aeq_idle_u32 = 0;
 
 static char g_settings_buf[65]; // 64 + NUL
 #if ENABLE_NFC
@@ -136,6 +144,16 @@ static void cb_aeq_filter(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uin
 {
   g_aeq_filter_u32 = rd_u32_le(data, len);
   g_aeq_filter_written = true;
+}
+static void cb_aeq_release(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_aeq_release_u32 = rd_u32_le(data, len);
+  g_aeq_release_written = true;
+}
+static void cb_aeq_idle(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_aeq_idle_u32 = rd_u32_le(data, len);
+  g_aeq_idle_written = true;
 }
 static void cb_mode(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
 {
@@ -311,6 +329,22 @@ void bleInit(uint16_t initialBrightness)
   audioTelemetryCharacteristic.setUserDescriptor("Audio debug telemetry v1");
   audioTelemetryCharacteristic.begin();
 
+  // AEQ output release time (uint32 milliseconds, 20..500).
+  aeqReleaseCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  aeqReleaseCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  aeqReleaseCharacteristic.setFixedLen(4);
+  aeqReleaseCharacteristic.setWriteCallback(cb_aeq_release);
+  aeqReleaseCharacteristic.setUserDescriptor("AEQ beat release (20..500 ms)");
+  aeqReleaseCharacteristic.begin();
+
+  // AEQ brightness between detected beats (uint32 percent, 0..15).
+  aeqIdleCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  aeqIdleCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  aeqIdleCharacteristic.setFixedLen(4);
+  aeqIdleCharacteristic.setWriteCallback(cb_aeq_idle);
+  aeqIdleCharacteristic.setUserDescriptor("AEQ idle brightness (0..15 percent)");
+  aeqIdleCharacteristic.begin();
+
 #if ENABLE_NFC
   // NFC URI (UTF-8 HTTP(S) text), read/write on NFC-enabled hardware only.
   nfcUriCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
@@ -328,6 +362,8 @@ void bleInit(uint16_t initialBrightness)
   noiseFloorCharacteristic.write32((uint32_t)noise_floor);
   filterCharacteristic.write32((uint32_t)(filter_alpha * 500.0f + 0.5f));
   aeqFilterCharacteristic.write32((uint32_t)(aeq_filter_alpha * 255.0f + 0.5f));
+  aeqReleaseCharacteristic.write32(aeq_release_ms);
+  aeqIdleCharacteristic.write32(aeq_idle_percent);
   debugCharacteristic.write8(ledMode);
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   vBatCharacteristic.write16(vbat_mV);
@@ -410,6 +446,23 @@ void bleUpdate()
     if (raw > 255) raw = 255;
     aeq_filter_alpha = (float)raw / 255.0f;
     aeqFilterCharacteristic.write32(raw);
+  }
+
+  if (g_aeq_release_written) {
+    g_aeq_release_written = false;
+    uint32_t raw = g_aeq_release_u32;
+    if (raw < 20) raw = 20;
+    if (raw > 500) raw = 500;
+    aeq_release_ms = (uint16_t)raw;
+    aeqReleaseCharacteristic.write32(raw);
+  }
+
+  if (g_aeq_idle_written) {
+    g_aeq_idle_written = false;
+    uint32_t raw = g_aeq_idle_u32;
+    if (raw > 15) raw = 15;
+    aeq_idle_percent = (uint8_t)raw;
+    aeqIdleCharacteristic.write32(raw);
   }
 
   if (g_mode_written) {
@@ -501,6 +554,8 @@ uint8_t  getLedMode()               { return ledMode; }
 float    getFilterAlpha()           { return filter_alpha; }
 float    bleGetNoiseFloor()         { return noise_floor; }
 float    bleGetAeqFilterAlpha()     { return aeq_filter_alpha; }
+uint16_t bleGetAeqReleaseMs()       { return aeq_release_ms; }
+uint8_t  bleGetAeqIdlePercent()     { return aeq_idle_percent; }
 
 void bleSetVBat_mV(uint16_t mv)
 {

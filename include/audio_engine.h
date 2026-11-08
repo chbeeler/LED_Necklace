@@ -8,6 +8,8 @@ struct AudioSettings {
   float sensitivity;
   float filterAlpha;
   float noiseFloor;
+  uint16_t aeqReleaseMs;
+  uint8_t aeqIdlePercent;
 };
 
 struct AudioTelemetry {

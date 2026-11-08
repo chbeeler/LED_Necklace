@@ -12,8 +12,9 @@ public:
   float process(const int16_t* samples,
                 size_t sampleCount,
                 uint32_t sampleRate,
-                float sensitivity,
-                float noiseFloor);
+                float noiseFloor,
+                float releaseSeconds,
+                float idleLevel);
 
   float envelope() const { return envelope_; }
   float floor() const { return floor_; }
