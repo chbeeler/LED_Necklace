@@ -27,6 +27,7 @@ static BLECharacteristic aeqFilterCharacteristic("19B10130-E8F2-537E-4F6C-D10476
 static BLECharacteristic audioTelemetryCharacteristic("19B10160-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic aeqReleaseCharacteristic("19B10170-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic aeqIdleCharacteristic("19B10180-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic settingsResetCharacteristic("19B10190-E8F2-537E-4F6C-D104768A1214");
 #if ENABLE_NFC
 static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1214");
 #endif
@@ -34,14 +35,18 @@ static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1
 // ===================== Your config/state =====================
 #define SENSITIVITY_CONV_FACTOR   (0.0005f)
 
+static const uint16_t AEQ_RELEASE_DEFAULT_MS = 60;
+static const uint8_t AEQ_IDLE_DEFAULT_PERCENT = 4;
+static const uint8_t RESET_AEQ_SETTINGS = 1;
+
 static uint16_t brightness = 100;
 static float    sensitivityF = 0.5f;
 static uint8_t  ledMode = MODE_AEQ;
 static float    filter_alpha = 0.15f;
 static float    aeq_filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;
-static uint16_t aeq_release_ms = 60;
-static uint8_t  aeq_idle_percent = 4;
+static uint16_t aeq_release_ms = AEQ_RELEASE_DEFAULT_MS;
+static uint8_t  aeq_idle_percent = AEQ_IDLE_DEFAULT_PERCENT;
 static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
 static uint16_t vol_min      = 0;
@@ -60,6 +65,7 @@ static volatile bool g_settings_written = false;
 static volatile bool g_aeq_filter_written = false;
 static volatile bool g_aeq_release_written = false;
 static volatile bool g_aeq_idle_written = false;
+static volatile bool g_settings_reset_written = false;
 #if ENABLE_NFC
 static volatile bool g_nfc_uri_written = false;
 #endif
@@ -73,6 +79,7 @@ static volatile uint8_t  g_mode_u8 = 0;
 static volatile uint32_t g_aeq_filter_u32 = 0;
 static volatile uint32_t g_aeq_release_u32 = 0;
 static volatile uint32_t g_aeq_idle_u32 = 0;
+static volatile uint8_t g_settings_reset_u8 = 0;
 
 static char g_settings_buf[65]; // 64 + NUL
 #if ENABLE_NFC
@@ -154,6 +161,13 @@ static void cb_aeq_idle(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8
 {
   g_aeq_idle_u32 = rd_u32_le(data, len);
   g_aeq_idle_written = true;
+}
+static void cb_settings_reset(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  if (len >= 1) {
+    g_settings_reset_u8 = data[0];
+    g_settings_reset_written = true;
+  }
 }
 static void cb_mode(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
 {
@@ -345,6 +359,14 @@ void bleInit(uint16_t initialBrightness)
   aeqIdleCharacteristic.setUserDescriptor("AEQ idle brightness (0..10 percent)");
   aeqIdleCharacteristic.begin();
 
+  // Device-owned settings reset command (0=idle, 1=reset AEQ settings).
+  settingsResetCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  settingsResetCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  settingsResetCharacteristic.setFixedLen(1);
+  settingsResetCharacteristic.setWriteCallback(cb_settings_reset);
+  settingsResetCharacteristic.setUserDescriptor("Settings reset command (1=AEQ)");
+  settingsResetCharacteristic.begin();
+
 #if ENABLE_NFC
   // NFC URI (UTF-8 HTTP(S) text), read/write on NFC-enabled hardware only.
   nfcUriCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
@@ -364,6 +386,7 @@ void bleInit(uint16_t initialBrightness)
   aeqFilterCharacteristic.write32((uint32_t)(aeq_filter_alpha * 255.0f + 0.5f));
   aeqReleaseCharacteristic.write32(aeq_release_ms);
   aeqIdleCharacteristic.write32(aeq_idle_percent);
+  settingsResetCharacteristic.write8(0);
   debugCharacteristic.write8(ledMode);
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
   vBatCharacteristic.write16(vbat_mV);
@@ -463,6 +486,18 @@ void bleUpdate()
     if (raw > 10) raw = 10;
     aeq_idle_percent = (uint8_t)raw;
     aeqIdleCharacteristic.write32(raw);
+  }
+
+  if (g_settings_reset_written) {
+    g_settings_reset_written = false;
+    if (g_settings_reset_u8 == RESET_AEQ_SETTINGS) {
+      aeq_release_ms = AEQ_RELEASE_DEFAULT_MS;
+      aeq_idle_percent = AEQ_IDLE_DEFAULT_PERCENT;
+      aeqReleaseCharacteristic.write32(aeq_release_ms);
+      aeqIdleCharacteristic.write32(aeq_idle_percent);
+    }
+    g_settings_reset_u8 = 0;
+    settingsResetCharacteristic.write8(0);
   }
 
   if (g_mode_written) {
