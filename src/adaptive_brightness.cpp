@@ -53,7 +53,7 @@ float AdaptiveBrightness::process(const int16_t* samples,
   const float rms = sqrtf(sumSquares / (float)sampleCount + 1.0e-12f);
 
   if (releaseSeconds < 0.020f) releaseSeconds = 0.020f;
-  if (releaseSeconds > 0.500f) releaseSeconds = 0.500f;
+  if (releaseSeconds > 0.140f) releaseSeconds = 0.140f;
 
   // Follow musical attacks quickly, but retain enough release time for a
   // visible pulse rather than tracking individual waveform cycles.

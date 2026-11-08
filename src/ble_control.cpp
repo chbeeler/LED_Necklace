@@ -343,12 +343,12 @@ void bleInit(uint16_t initialBrightness)
   audioTelemetryCharacteristic.setUserDescriptor("Audio debug telemetry v1");
   audioTelemetryCharacteristic.begin();
 
-  // AEQ output release time (uint32 milliseconds, 20..500).
+  // AEQ output release time (uint32 milliseconds, 20..140).
   aeqReleaseCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
   aeqReleaseCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   aeqReleaseCharacteristic.setFixedLen(4);
   aeqReleaseCharacteristic.setWriteCallback(cb_aeq_release);
-  aeqReleaseCharacteristic.setUserDescriptor("AEQ beat release (20..500 ms)");
+  aeqReleaseCharacteristic.setUserDescriptor("AEQ beat release (20..140 ms)");
   aeqReleaseCharacteristic.begin();
 
   // AEQ brightness between detected beats (uint32 percent, 0..10).
@@ -475,7 +475,7 @@ void bleUpdate()
     g_aeq_release_written = false;
     uint32_t raw = g_aeq_release_u32;
     if (raw < 20) raw = 20;
-    if (raw > 500) raw = 500;
+    if (raw > 140) raw = 140;
     aeq_release_ms = (uint16_t)raw;
     aeqReleaseCharacteristic.write32(raw);
   }
