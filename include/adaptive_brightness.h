@@ -16,6 +16,10 @@ public:
                 float releaseSeconds,
                 float idleLevel);
 
+  // RMS is in full-scale units (signed PCM RMS / 32768); noiseFloor is in PCM counts.
+  float processRms(float rms, float dt, float noiseFloor,
+                   float releaseSeconds, float idleLevel);
+
   float envelope() const { return envelope_; }
   float floor() const { return floor_; }
   float ceiling() const { return ceiling_; }

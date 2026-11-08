@@ -52,6 +52,14 @@ float AdaptiveBrightness::process(const int16_t* samples,
   const float dt = (float)sampleCount / (float)sampleRate;
   const float rms = sqrtf(sumSquares / (float)sampleCount + 1.0e-12f);
 
+  return processRms(rms, dt, noiseFloor, releaseSeconds, idleLevel);
+}
+
+float AdaptiveBrightness::processRms(float rms, float dt, float noiseFloor,
+                                     float releaseSeconds, float idleLevel)
+{
+  if (!(dt > 0.0f) || !(rms >= 0.0f)) return output_;
+  const float pcmScale = 1.0f / 32768.0f;
   if (releaseSeconds < 0.020f) releaseSeconds = 0.020f;
   if (releaseSeconds > 0.140f) releaseSeconds = 0.140f;
 
