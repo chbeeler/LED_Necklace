@@ -9,6 +9,14 @@ constexpr uint8_t PLUS_SENSE_PIN = D9;
 constexpr uint8_t MINUS_DRIVE_PIN = D4;
 constexpr uint8_t MINUS_SENSE_PIN = D6;
 constexpr uint32_t DEBOUNCE_MS = 25UL;
+constexpr uint32_t MODIFIER_LEAD_MS = 100UL;
+constexpr uint32_t SECONDARY_TAP_MAX_MS = 600UL;
+
+enum class ChordModifier : uint8_t {
+  None,
+  Plus,
+  Minus,
+};
 
 struct ButtonState {
   bool rawPressed = false;
@@ -24,6 +32,7 @@ bool minusLongHandled = false;
 bool chordActive = false;
 bool chordHandled = false;
 uint32_t chordStartedMs = 0;
+ChordModifier chordModifier = ChordModifier::None;
 
 void updateButton(ButtonState &state, bool rawPressed, uint32_t nowMs,
                   const char *name)
@@ -89,8 +98,20 @@ ButtonAction update(uint32_t nowMs)
       chordActive = true;
       chordHandled = false;
       chordStartedMs = nowMs;
+      if (plusWasPressed &&
+          (uint32_t)(nowMs - plusState.pressedMs) >= MODIFIER_LEAD_MS) {
+        chordModifier = ChordModifier::Plus;
+      } else if (minusWasPressed &&
+                 (uint32_t)(nowMs - minusState.pressedMs) >=
+                     MODIFIER_LEAD_MS) {
+        chordModifier = ChordModifier::Minus;
+      } else {
+        chordModifier = ChordModifier::None;
+      }
       plusLongHandled = true;
       minusLongHandled = true;
+    } else if (!(plusWasPressed && minusWasPressed)) {
+      chordStartedMs = nowMs;
     }
 
     if (!chordHandled &&
@@ -105,9 +126,24 @@ ButtonAction update(uint32_t nowMs)
   // Once a chord starts, suppress individual actions until both buttons have
   // been released.
   if (chordActive) {
+    const uint32_t overlapMs = nowMs - chordStartedMs;
+    if (overlapMs <= SECONDARY_TAP_MAX_MS) {
+      if (chordModifier == ChordModifier::Minus && minusPressed &&
+          plusWasPressed && !plusPressed) {
+        chordHandled = true;
+        return ButtonAction::SecondaryUp;
+      }
+      if (chordModifier == ChordModifier::Plus && plusPressed &&
+          minusWasPressed && !minusPressed) {
+        chordHandled = true;
+        return ButtonAction::SecondaryDown;
+      }
+    }
+
     if (!plusPressed && !minusPressed) {
       chordActive = false;
       chordHandled = false;
+      chordModifier = ChordModifier::None;
       plusLongHandled = false;
       minusLongHandled = false;
     }

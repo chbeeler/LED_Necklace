@@ -75,6 +75,36 @@ static void changeBrightness(bool increase)
   Serial.println(next);
 }
 
+static void changeSecondarySetting(bool increase)
+{
+  const uint8_t mode = getLedMode();
+  if (mode == MODE_AEQ) {
+    const uint8_t current = bleGetAeqIdlePercent();
+    const uint8_t next = increase ? (current < 10 ? current + 1 : 10)
+                                  : (current > 0 ? current - 1 : 0);
+    if (next == current) return;
+    bleSetAeqIdlePercentFromButtons(next);
+    Serial.print("AEQ idle brightness: ");
+    Serial.print(next);
+    Serial.println('%');
+    return;
+  }
+
+  if (mode == MODE_CONSTANT) {
+    const uint16_t current = bleGetBrightness();
+    const uint16_t next = increase ? (current < 4095 ? current + 1 : 4095)
+                                   : (current > 0 ? current - 1 : 0);
+    if (next == current) return;
+    bleSetBrightnessFromButtons(next);
+    brightness = next;
+    Serial.print("Fine brightness: ");
+    Serial.println(next);
+    return;
+  }
+
+  Serial.println("Secondary adjustment ignored in this LED mode");
+}
+
 static void toggleAeqConstantMode()
 {
   const uint8_t currentMode = getLedMode();
@@ -470,6 +500,12 @@ void loop()
         break;
       case ButtonAction::BrightnessDown:
         changeBrightness(false);
+        break;
+      case ButtonAction::SecondaryUp:
+        changeSecondarySetting(true);
+        break;
+      case ButtonAction::SecondaryDown:
+        changeSecondarySetting(false);
         break;
       case ButtonAction::ToggleAeqConstant:
         toggleAeqConstantMode();

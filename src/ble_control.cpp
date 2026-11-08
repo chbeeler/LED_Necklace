@@ -591,6 +591,13 @@ float    bleGetNoiseFloor()         { return noise_floor; }
 float    bleGetAeqFilterAlpha()     { return aeq_filter_alpha; }
 uint16_t bleGetAeqReleaseMs()       { return aeq_release_ms; }
 uint8_t  bleGetAeqIdlePercent()     { return aeq_idle_percent; }
+void bleSetAeqIdlePercentFromButtons(uint8_t value)
+{
+  if (value > 10) value = 10;
+  aeq_idle_percent = value;
+  aeqIdleCharacteristic.write32(aeq_idle_percent);
+  writeSettingsString();
+}
 
 void bleSetVBat_mV(uint16_t mv)
 {
