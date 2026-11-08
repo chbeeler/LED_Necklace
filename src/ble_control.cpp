@@ -40,8 +40,8 @@ static uint8_t  ledMode = MODE_AEQ;
 static float    filter_alpha = 0.15f;
 static float    aeq_filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;
-static uint16_t aeq_release_ms = 130;
-static uint8_t  aeq_idle_percent = 0;
+static uint16_t aeq_release_ms = 60;
+static uint8_t  aeq_idle_percent = 4;
 static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
 static uint16_t vol_min      = 0;
@@ -337,12 +337,12 @@ void bleInit(uint16_t initialBrightness)
   aeqReleaseCharacteristic.setUserDescriptor("AEQ beat release (20..500 ms)");
   aeqReleaseCharacteristic.begin();
 
-  // AEQ brightness between detected beats (uint32 percent, 0..15).
+  // AEQ brightness between detected beats (uint32 percent, 0..10).
   aeqIdleCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
   aeqIdleCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   aeqIdleCharacteristic.setFixedLen(4);
   aeqIdleCharacteristic.setWriteCallback(cb_aeq_idle);
-  aeqIdleCharacteristic.setUserDescriptor("AEQ idle brightness (0..15 percent)");
+  aeqIdleCharacteristic.setUserDescriptor("AEQ idle brightness (0..10 percent)");
   aeqIdleCharacteristic.begin();
 
 #if ENABLE_NFC
@@ -460,7 +460,7 @@ void bleUpdate()
   if (g_aeq_idle_written) {
     g_aeq_idle_written = false;
     uint32_t raw = g_aeq_idle_u32;
-    if (raw > 15) raw = 15;
+    if (raw > 10) raw = 10;
     aeq_idle_percent = (uint8_t)raw;
     aeqIdleCharacteristic.write32(raw);
   }
