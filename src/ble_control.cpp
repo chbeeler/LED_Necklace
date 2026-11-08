@@ -348,7 +348,7 @@ void bleInit(uint16_t initialBrightness)
   aeqReleaseCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   aeqReleaseCharacteristic.setFixedLen(4);
   aeqReleaseCharacteristic.setWriteCallback(cb_aeq_release);
-  aeqReleaseCharacteristic.setUserDescriptor("AEQ beat release (20..140 ms)");
+  aeqReleaseCharacteristic.setUserDescriptor("AEQ beat afterglow (20..140 ms)");
   aeqReleaseCharacteristic.begin();
 
   // AEQ brightness between detected beats (uint32 percent, 0..10).
