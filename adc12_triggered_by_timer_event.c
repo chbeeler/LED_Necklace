@@ -31,69 +31,106 @@
  */
 
 #include "ti_msp_dl_config.h"
+#include <math.h>
 
 void runAeqFitCheck(void);
+float updateLedBrightness(float adcRms, uint16_t windowLength);
 
-volatile bool gCheckADC;
-volatile uint16_t gADCResult[4];
-volatile int16_t gADCOffset[4];
+enum { windowSamples = 256, adcMax = 4095 };
+
+typedef struct {
+    uint32_t sum;
+    uint32_t sumSquares;  // 256 * 4095^2 fits in uint32_t.
+    uint16_t minimum;
+    uint16_t maximum;
+} MicWindow;
+
+static MicWindow collecting = {.minimum = adcMax};
+static volatile MicWindow completed;
+static volatile bool windowReady;
+static uint16_t samplesInWindow;
+static int16_t adcOffset;
+
+// CCS watch values for the most recently processed 16 ms window, in ADC counts.
+volatile float ledBrightness;
+static volatile uint16_t ledDuty;  // 0..256
+static uint16_t ledAccumulator;
+volatile float micMean;
+volatile float micRms;  // AC only, after subtracting the window mean
+volatile uint16_t micPeakToPeak;
+volatile uint32_t micSamples;
+volatile uint32_t micWindows;
+volatile uint32_t micClippedSamples;
+volatile uint32_t micMissedWindows;
+volatile uint32_t micAdcOverruns;
+volatile uint32_t micTriggerOverruns;
+
+static void recordSample(uint16_t raw)
+{
+    if (raw == 0 || raw == adcMax) ++micClippedSamples;
+    int32_t corrected = (int32_t)raw + adcOffset;
+    if (corrected < 0) corrected = 0;
+    if (corrected > adcMax) corrected = adcMax;
+    uint32_t value = (uint32_t)corrected;
+    collecting.sum += value;
+    collecting.sumSquares += value * value;
+    if (value < collecting.minimum) collecting.minimum = value;
+    if (value > collecting.maximum) collecting.maximum = value;
+    ++micSamples;
+    if (++samplesInWindow == windowSamples) {
+        if (windowReady) ++micMissedWindows;
+        completed = collecting;
+        collecting = (MicWindow){.minimum = adcMax};
+        samplesInWindow = 0;
+        windowReady = true;
+        __SEV();
+    }
+}
 
 int main(void)
 {
     SYSCFG_DL_init();
     runAeqFitCheck();
-
-    /* Get calibrated ADC offset - workaround for ADC_ERR_09 */
-    gADCOffset[0] =
-        DL_ADC12_getADCOffsetCalibration(ADC12_0_ADCMEM_0_REF_VOLTAGE_V);
-    gADCOffset[1] =
-        DL_ADC12_getADCOffsetCalibration(ADC12_0_ADCMEM_1_REF_VOLTAGE_V);
-    gADCOffset[2] =
-        DL_ADC12_getADCOffsetCalibration(ADC12_0_ADCMEM_2_REF_VOLTAGE_V);
-    gADCOffset[3] =
-        DL_ADC12_getADCOffsetCalibration(ADC12_0_ADCMEM_3_REF_VOLTAGE_V);
-
+    adcOffset = DL_ADC12_getADCOffsetCalibration(ADC12_0_ADCMEM_0_REF_VOLTAGE_V);
     NVIC_EnableIRQ(ADC12_0_INST_INT_IRQN);
-
-    gCheckADC = false;
-
     DL_TimerG_startCounter(TIMER_0_INST);
-
-    while (false == gCheckADC) {
-        __WFE();
-    }
-
-    gADCResult[0] = DL_ADC12_getMemResult(ADC12_0_INST, DL_ADC12_MEM_IDX_0);
-    gADCResult[1] = DL_ADC12_getMemResult(ADC12_0_INST, DL_ADC12_MEM_IDX_1);
-    gADCResult[2] = DL_ADC12_getMemResult(ADC12_0_INST, DL_ADC12_MEM_IDX_2);
-    gADCResult[3] = DL_ADC12_getMemResult(ADC12_0_INST, DL_ADC12_MEM_IDX_3);
-
-    /* Apply calibrated ADC offset - workaround for ADC_ERR_09 */
-    int16_t adcRaw;
-    for (size_t i = 0; i < sizeof(gADCResult) / sizeof(gADCResult[0]); i++) {
-        adcRaw = (int16_t) gADCResult[i];
-        adcRaw = adcRaw + gADCOffset[i];
-        if (adcRaw < 0) {
-            adcRaw = 0;
-        }
-        if (adcRaw > 4095) {
-            adcRaw = 4095;
-        }
-        gADCResult[i] = (uint16_t) adcRaw;
-    }
-
-    __BKPT(0);
-
-    while (1) {
-        __WFI();
+    for (;;) {
+        while (!windowReady) __WFE();
+        __disable_irq();
+        MicWindow window = completed;
+        windowReady = false;
+        __enable_irq();
+        // Subtract the bias in integer arithmetic before converting to float.
+        uint64_t varianceNumerator = (uint64_t)window.sumSquares * windowSamples
+                                   - (uint64_t)window.sum * window.sum;
+        micRms = sqrtf((float)varianceNumerator) / windowSamples;
+        micMean = (float)window.sum / windowSamples;
+        micPeakToPeak = window.maximum - window.minimum;
+        ledBrightness = updateLedBrightness(micRms, windowSamples);
+        ledDuty = (uint16_t)(ledBrightness * 256.0f + 0.5f);
+        ++micWindows;
     }
 }
 
 void ADC12_0_INST_IRQHandler(void)
 {
     switch (DL_ADC12_getPendingInterrupt(ADC12_0_INST)) {
-        case DL_ADC12_IIDX_MEM3_RESULT_LOADED:
-            gCheckADC = true;
+        case DL_ADC12_IIDX_MEM0_RESULT_LOADED:
+            // LED1 sinks current: PA22 low is the illuminated part of each pulse.
+            ledAccumulator += ledDuty;
+            if (ledAccumulator >= 256) {
+                ledAccumulator -= 256;
+                DL_GPIO_clearPins(GPIO_LEDS_PORT, GPIO_LEDS_USER_LED_PIN);
+            } else {
+                DL_GPIO_setPins(GPIO_LEDS_PORT, GPIO_LEDS_USER_LED_PIN);
+            }
+            recordSample(DL_ADC12_getMemResult(ADC12_0_INST, DL_ADC12_MEM_IDX_0));
+            break;
+        case DL_ADC12_IIDX_OVERFLOW:
+            ++micAdcOverruns;
+            break;
+        case DL_ADC12_IIDX_TRIG_OVERFLOW:
+            ++micTriggerOverruns;
             break;
         default:
             break;
