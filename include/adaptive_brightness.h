@@ -12,7 +12,8 @@ public:
   float process(const int16_t* samples,
                 size_t sampleCount,
                 uint32_t sampleRate,
-                float sensitivity);
+                float sensitivity,
+                float noiseFloor);
 
   float envelope() const { return envelope_; }
   float floor() const { return floor_; }
@@ -27,8 +28,8 @@ private:
   float envelope_;
   float floor_;
   float ceiling_;
-  float previousLevel_;
-  float flash_;
+  float baseline_;
+  float modulationPeak_;
   float output_;
   bool saturated_;
 };

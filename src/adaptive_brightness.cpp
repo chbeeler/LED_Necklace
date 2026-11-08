@@ -10,10 +10,10 @@ AdaptiveBrightness::AdaptiveBrightness()
 void AdaptiveBrightness::reset()
 {
   envelope_ = 0.0f;
-  floor_ = 0.001f;
-  ceiling_ = 0.020f;
-  previousLevel_ = 0.0f;
-  flash_ = 0.0f;
+  floor_ = 0.0f;
+  ceiling_ = 0.0f;
+  baseline_ = 0.0f;
+  modulationPeak_ = 0.0f;
   output_ = 0.0f;
   saturated_ = false;
 }
@@ -34,7 +34,8 @@ float AdaptiveBrightness::clamp01(float value)
 float AdaptiveBrightness::process(const int16_t* samples,
                                   size_t sampleCount,
                                   uint32_t sampleRate,
-                                  float sensitivity)
+                                  float sensitivity,
+                                  float noiseFloor)
 {
   if (samples == nullptr || sampleCount == 0 || sampleRate == 0) {
     return output_;
@@ -50,39 +51,60 @@ float AdaptiveBrightness::process(const int16_t* samples,
   const float dt = (float)sampleCount / (float)sampleRate;
   const float rms = sqrtf(sumSquares / (float)sampleCount + 1.0e-12f);
 
-  const float envelopeTau = rms > envelope_ ? 0.025f : 0.180f;
+  // Follow musical attacks quickly, but retain enough release time for a
+  // visible pulse rather than tracking individual waveform cycles.
+  const float envelopeTau = rms > envelope_ ? 0.020f : 0.130f;
   envelope_ += smoothingCoefficient(envelopeTau, dt) * (rms - envelope_);
 
-  const float floorTau = rms < floor_ ? 1.5f : 18.0f;
-  if (rms < ceiling_ * 0.35f) {
-    floor_ += smoothingCoefficient(floorTau, dt) * (rms - floor_);
+  // The slow envelope represents the current music level. Subtracting it
+  // makes the response depend on rhythmic movement, not absolute venue volume.
+  const float baselineTau = envelope_ > baseline_ ? 1.20f : 2.00f;
+  baseline_ += smoothingCoefficient(baselineTau, dt) *
+               (envelope_ - baseline_);
+
+  float modulation = envelope_ - baseline_;
+  if (modulation < 0.0f) modulation = 0.0f;
+
+  // Normalize the rhythmic movement against recent strong movements. The peak
+  // falls slowly enough to avoid amplifying every small gap or noise transient.
+  const float decayedModulationPeak =
+      modulationPeak_ * expf(-dt / 2.0f);
+  modulationPeak_ = modulation > decayedModulationPeak
+                        ? modulation
+                        : decayedModulationPeak;
+
+  // Keep tiny microphone/noise changes from being expanded to a full flash.
+  const float normalizedNoiseFloor =
+      noiseFloor > 0.0f ? noiseFloor * pcmScale : 0.0f;
+  float minimumModulation = normalizedNoiseFloor * 2.0f;
+  if (minimumModulation < 0.0005f) minimumModulation = 0.0005f;
+  const bool musicActive = envelope_ > normalizedNoiseFloor &&
+                           modulationPeak_ > minimumModulation;
+
+  float beat = 0.0f;
+  if (musicActive) {
+    beat = clamp01(modulation / modulationPeak_);
   }
 
-  float ceilingTarget = envelope_;
-  const float minimumCeiling = floor_ + 0.004f;
-  if (ceilingTarget < minimumCeiling) ceilingTarget = minimumCeiling;
-  const float ceilingTau = ceilingTarget > ceiling_ ? 0.35f : 6.0f;
-  ceiling_ += smoothingCoefficient(ceilingTau, dt) * (ceilingTarget - ceiling_);
+  // The existing EQ sensitivity control acts as AEQ contrast for now. Its app
+  // maximum is 0.5 in firmware, so map that to full contrast. Reduced contrast
+  // raises the between-beat brightness while strong beats still reach 100%.
+  const float contrast = clamp01(sensitivity * 2.0f);
+  const float fullContrastFloor = 0.10f;
+  const float betweenBeatLevel =
+      fullContrastFloor + (1.0f - contrast) *
+                              (1.0f - fullContrastFloor);
+  const float shapedBeat = powf(beat, 1.5f);
+  const float target = musicActive
+                           ? betweenBeatLevel +
+                                 (1.0f - betweenBeatLevel) * shapedBeat
+                           : 0.0f;
 
-  float span = ceiling_ - floor_;
-  if (span < 0.003f) span = 0.003f;
-  const float normalizedLevel = (envelope_ - floor_) / span;
-  const float scaledLevel = clamp01(normalizedLevel) * sensitivity;
-  saturated_ = normalizedLevel >= 1.0f || scaledLevel >= 1.0f;
-  const float level = clamp01(scaledLevel);
+  floor_ = baseline_;
+  ceiling_ = baseline_ + modulationPeak_;
+  saturated_ = musicActive && target >= 0.995f;
 
-  float onset = level - previousLevel_;
-  if (onset < 0.0f) onset = 0.0f;
-  previousLevel_ = level;
-
-  const float decayedFlash = flash_ * expf(-dt / 0.13f);
-  float onsetFlash = onset * 3.2f;
-  if (onsetFlash > 1.0f) onsetFlash = 1.0f;
-  flash_ = decayedFlash > onsetFlash ? decayedFlash : onsetFlash;
-
-  const float shapedLevel = powf(level, 1.35f);
-  const float target = shapedLevel > flash_ ? shapedLevel : flash_;
-  const float outputTau = target > output_ ? 0.018f : 0.110f;
+  const float outputTau = target > output_ ? 0.018f : 0.130f;
   output_ += smoothingCoefficient(outputTau, dt) * (target - output_);
   output_ = clamp01(output_);
   return output_;
