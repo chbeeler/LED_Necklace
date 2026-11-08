@@ -78,11 +78,11 @@ float AdaptiveBrightness::process(const int16_t* samples,
       noiseFloor > 0.0f ? noiseFloor * pcmScale : 0.0f;
   float minimumModulation = normalizedNoiseFloor * 2.0f;
   if (minimumModulation < 0.0005f) minimumModulation = 0.0005f;
-  const bool musicActive = envelope_ > normalizedNoiseFloor &&
-                           modulationPeak_ > minimumModulation;
+  const bool beatActive = envelope_ > normalizedNoiseFloor &&
+                          modulationPeak_ > minimumModulation;
 
   float beat = 0.0f;
-  if (musicActive) {
+  if (beatActive) {
     beat = clamp01(modulation / modulationPeak_);
   }
 
@@ -95,14 +95,14 @@ float AdaptiveBrightness::process(const int16_t* samples,
       fullContrastFloor + (1.0f - contrast) *
                               (1.0f - fullContrastFloor);
   const float shapedBeat = powf(beat, 1.5f);
-  const float target = musicActive
-                           ? betweenBeatLevel +
-                                 (1.0f - betweenBeatLevel) * shapedBeat
-                           : 0.0f;
+  // AEQ always retains its between-beat level. The signal gate suppresses
+  // false pulses in quiet conditions, but never switches the baseline off.
+  const float target =
+      betweenBeatLevel + (1.0f - betweenBeatLevel) * shapedBeat;
 
   floor_ = baseline_;
   ceiling_ = baseline_ + modulationPeak_;
-  saturated_ = musicActive && target >= 0.995f;
+  saturated_ = beatActive && target >= 0.995f;
 
   const float outputTau = target > output_ ? 0.018f : 0.130f;
   output_ += smoothingCoefficient(outputTau, dt) * (target - output_);
