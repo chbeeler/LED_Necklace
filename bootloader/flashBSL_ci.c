@@ -470,27 +470,20 @@ void CMD_API_Get_Identity(void)
 
 void CMD_API_Standalone_Verification(uint32_t addr_start)
 {
-    uint32_t main_flash_start_address = FLASHCTL_MAIN_ADDRESS;
-    uint32_t main_flash_end_address;
-    uint32_t info_flash_start_address = MSPM0_INFO_FLASH_START_ADDRESS;
-    uint32_t info_flash_end_address   = MSPM0_INFO_FLASH_END_ADDRESS;
-
-    uint32_t length;
-    uint32_t addr_end;
+    uint32_t length = *((uint32_t *) &BSL_RXBuf[DATA_LENGTH_INDEX]);
     uint32_t result;
-
-    main_flash_end_address = BSL_CI_getFlashEndAddress();
-
-    length   = *((uint32_t *) &BSL_RXBuf[DATA_LENGTH_INDEX]);
-    addr_end = addr_start + length;
-
-    /* Check if BSL is unlocked */
     if (BSLLockedStatus == BSL_STATUS_UNLOCKED) {
-        /* Check if length is valid else error is returned */
-        if ((length >= MAIN_SECTOR_SIZE)) {
-            /* Check if address is in the valid memory region */
-            if ((BSL_CI_isMainFlashAddr(addr_start, addr_end)) ||
-                (BSL_CI_isInfoFlashAddr(addr_start, addr_end))) {
+        if (length >= MAIN_SECTOR_SIZE) {
+#ifdef AEQ_LIGHT
+            /* Verify the application body before committing its vectors, or the
+             * complete image afterwards. Do not expose other memory via CRC. */
+            if ((addr_start == MAIN_APP_START_ADDR || addr_start == MAIN_APP_START_ADDR + 8U)
+                && length <= 0x4000U - addr_start) {
+#else
+            uint32_t end = addr_start + length;
+            if (end >= addr_start && (BSL_CI_isMainFlashAddr(addr_start, end) ||
+                BSL_CI_isInfoFlashAddr(addr_start, end))) {
+#endif
                 /* Frame the CRC packet */
                 BSL_TXBuf[HEADER_INDEX]     = PACKET_HEADER_RESPONSE;
                 BSL_TXBuf[LEN_BYTE_L_INDEX] = STANDALONE_VERIFY_RSP_LEN;

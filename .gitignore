@@ -1,3 +1,5 @@
 /Debug/
+/Light/
+/bootloader/__pycache__/
 /Release/
 /.clangd

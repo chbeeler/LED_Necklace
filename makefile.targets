@@ -1,0 +1,5 @@
+# CCS builds "all" in the selected configuration directory.
+PROFILE := $(if $(filter Light,$(notdir $(CURDIR))),light,full)
+all: boot-images/AEQ-install.txt
+boot-images/AEQ-install.txt: AEQ.out $(wildcard ../bootloader/*.c ../bootloader/*.h ../bootloader/*.cmd) ../bootloader/build.py
+	python ../bootloader/build.py --profile $(PROFILE)

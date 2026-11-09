@@ -41,7 +41,12 @@
 /* Ordinary constants in main flash; never program NONMAIN. */
 const BCR_Config BCRConfig = {.bcrConfigID = 3};
 const BSL_Config BSLConfig = {
+#ifdef AEQ_LIGHT
+    /* UART Get Identity: "AQL1" identifies this light protocol and layout. */
+    .configID = 0x314c5141U,
+#else
     .configID = 0x3,
+#endif
 
     .interfacePins.UART_RXD_pad_num    = DEF_UART_RXD_PAD,
     .interfacePins.UART_RXD_PF_mux_sel = DEF_UART_RXD_MUX,

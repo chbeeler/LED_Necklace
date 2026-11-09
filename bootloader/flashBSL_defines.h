@@ -44,8 +44,12 @@
 /*
  * User Application Address Info
  */
-#define MAIN_APP_START_ADDR ((uint32_t) 0x00001800U)
-#define MAIN_APP_RESET_VECTOR_ADDR ((uint32_t) 0x00001804U)
+#ifdef AEQ_LIGHT
+#define MAIN_APP_START_ADDR 0x1000U
+#else
+#define MAIN_APP_START_ADDR 0x1800U
+#endif
+#define MAIN_APP_RESET_VECTOR_ADDR (MAIN_APP_START_ADDR + 4U)
 
 #if UART_INTERFACE
 #define ACTIVE_INTERFACE_INIT BSL_PI_UART_init
