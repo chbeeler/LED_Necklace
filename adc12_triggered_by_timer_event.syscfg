@@ -50,3 +50,16 @@ leds.associatedPins.create(1);
 leds.associatedPins[0].$name = "USER_LED";
 leds.associatedPins[0].initialValue = "SET";
 leds.associatedPins[0].assignedPin = "22";
+
+// Normally open switches connect the input to ground when pressed.
+const buttons = GPIO.addInstance();
+buttons.$name = "GPIO_BUTTONS";
+buttons.associatedPins.create(2);
+buttons.associatedPins[0].$name = "PLUS";
+buttons.associatedPins[0].assignedPin = "24"; // J1 pin 5
+buttons.associatedPins[1].$name = "MINUS";
+buttons.associatedPins[1].assignedPin = "23"; // J2 pin 12
+for (const pin of [buttons.associatedPins[0], buttons.associatedPins[1]]) {
+    pin.direction = "INPUT";
+    pin.internalResistor = "PULL_UP";
+}
