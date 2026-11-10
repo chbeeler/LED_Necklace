@@ -15,7 +15,7 @@ LedMode mode = MODE_AEQ;
 volatile float micNoiseFloor = 1.2f;
 volatile float micInputGain = 12.0f;
 
-extern "C" void updateButtons(bool plus, bool minus, uint32_t nowMs)
+extern "C" bool updateButtons(bool plus, bool minus, uint32_t nowMs)
 {
     const ButtonAction action = buttons.update(plus, minus, nowMs);
     switch (action) {
@@ -35,9 +35,11 @@ extern "C" void updateButtons(bool plus, bool minus, uint32_t nowMs)
         if (mode == MODE_AEQ) liveBrightness.reset();
         break;
     case ButtonAction::RequestSystemOff:
+        return true;
     case ButtonAction::None:
         break;
     }
+    return false;
 }
 
 extern "C" float updateLedBrightness(float adcRms, uint16_t windowSamples)

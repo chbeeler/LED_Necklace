@@ -34,7 +34,8 @@
 #include <math.h>
 
 void runAeqFitCheck(void);
-void updateButtons(bool plus, bool minus, uint32_t nowMs);
+void enterButtonStandby(void);
+bool updateButtons(bool plus, bool minus, uint32_t nowMs);
 float updateLedBrightness(float adcRms, uint16_t windowLength);
 
 enum { windowSamples = 256, adcMax = 4095 };
@@ -111,7 +112,11 @@ int main(void)
         micMean = (float)window.sum / windowSamples;
         micPeakToPeak = window.maximum - window.minimum;
         uint32_t pins = DL_GPIO_readPins(GPIO_BUTTONS_PORT, GPIO_BUTTONS_PLUS_PIN | GPIO_BUTTONS_MINUS_PIN);
-        updateButtons(!(pins & GPIO_BUTTONS_PLUS_PIN), !(pins & GPIO_BUTTONS_MINUS_PIN), nowMs);
+        if (updateButtons(!(pins & GPIO_BUTTONS_PLUS_PIN), !(pins & GPIO_BUTTONS_MINUS_PIN), nowMs)) {
+            ledBrightness = 0.0f;
+            ledDuty = 0;
+            enterButtonStandby();
+        }
         ledBrightness = updateLedBrightness(micRms, windowSamples);
         ledDuty = (uint16_t)(ledBrightness * 4095.0f + 0.5f);
         ++micWindows;
