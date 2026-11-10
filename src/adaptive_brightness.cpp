@@ -99,7 +99,7 @@ float AdaptiveBrightness::processRms(float rms, float dt, float noiseFloor,
   }
 
   const float betweenBeatLevel = clamp01(idleLevel);
-  const float shapedBeat = powf(beat, 1.5f);
+  const float shapedBeat = beat * sqrtf(beat);
   // AEQ always retains its between-beat level. The signal gate suppresses
   // false pulses in quiet conditions, but never switches the baseline off.
   const float target =
