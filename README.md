@@ -1,3 +1,14 @@
+## AEQ button power control
+
+Use normally open switches from PA24 (Plus, J1 pin 5) and PA23 (Minus, J2 pin 12) to ground. To try the off/wake cycle on a programmed board:
+
+1. Hold both buttons for 1.5 seconds until the LED goes out, then release both. The sampling timer and ADC are powered down. The MCU waits in STANDBY0 between button edges.
+2. Tap either button alone, then try a short two-button press. The LED should stay off.
+3. Hold both continuously for 1.5 seconds, then release both. After 100 ms of stable release, the MCU resets and AEQ starts with its normal defaults. Check the LED response with a clap.
+4. Separately, hold S2 while tapping RESET to enter the loader. Use the matching UART updater with the probe option to check it, then reset without S2 to resume AEQ.
+
+The microphone breakout still draws power if wired directly to 3.3 V. For a current measurement, distinguish the target MCU supply from the microphone, onboard debugger and other LaunchPad loads.
+
 ## Example Summary
 
 The following example configures ADC0 to be triggered by a TimerG instance 1s
