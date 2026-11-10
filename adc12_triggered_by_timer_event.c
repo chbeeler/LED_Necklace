@@ -34,6 +34,7 @@
 #include <math.h>
 
 void runAeqFitCheck(void);
+void updateButtons(bool plus, bool minus, uint32_t nowMs);
 float updateLedBrightness(float adcRms, uint16_t windowLength);
 
 enum { windowSamples = 256, adcMax = 4095 };
@@ -48,12 +49,13 @@ typedef struct {
 static MicWindow collecting = {.minimum = adcMax};
 static volatile MicWindow completed;
 static volatile bool windowReady;
+static volatile uint32_t audioTimeMs;
 static uint16_t samplesInWindow;
 static int16_t adcOffset;
 
 // CCS watch values for the most recently processed 16 ms window, in ADC counts.
 volatile float ledBrightness;
-static volatile uint16_t ledDuty;  // 0..256
+static volatile uint16_t ledDuty;  // 0..4095
 static uint16_t ledAccumulator;
 volatile float micMean;
 volatile float micRms;  // AC only, after subtracting the window mean
@@ -79,6 +81,7 @@ static void recordSample(uint16_t raw)
     ++micSamples;
     if (++samplesInWindow == windowSamples) {
         if (windowReady) ++micMissedWindows;
+        audioTimeMs += windowSamples / 16; // ADC clocked at 16 samples per ms.
         completed = collecting;
         collecting = (MicWindow){.minimum = adcMax};
         samplesInWindow = 0;
@@ -98,6 +101,7 @@ int main(void)
         while (!windowReady) __WFE();
         __disable_irq();
         MicWindow window = completed;
+        uint32_t nowMs = audioTimeMs;
         windowReady = false;
         __enable_irq();
         // Subtract the bias in integer arithmetic before converting to float.
@@ -106,8 +110,10 @@ int main(void)
         micRms = sqrtf((float)varianceNumerator) / windowSamples;
         micMean = (float)window.sum / windowSamples;
         micPeakToPeak = window.maximum - window.minimum;
+        uint32_t pins = DL_GPIO_readPins(GPIO_BUTTONS_PORT, GPIO_BUTTONS_PLUS_PIN | GPIO_BUTTONS_MINUS_PIN);
+        updateButtons(!(pins & GPIO_BUTTONS_PLUS_PIN), !(pins & GPIO_BUTTONS_MINUS_PIN), nowMs);
         ledBrightness = updateLedBrightness(micRms, windowSamples);
-        ledDuty = (uint16_t)(ledBrightness * 256.0f + 0.5f);
+        ledDuty = (uint16_t)(ledBrightness * 4095.0f + 0.5f);
         ++micWindows;
     }
 }
@@ -118,8 +124,8 @@ void ADC12_0_INST_IRQHandler(void)
         case DL_ADC12_IIDX_MEM0_RESULT_LOADED:
             // LED1 sinks current: PA22 low is the illuminated part of each pulse.
             ledAccumulator += ledDuty;
-            if (ledAccumulator >= 256) {
-                ledAccumulator -= 256;
+            if (ledAccumulator >= 4095) {
+                ledAccumulator -= 4095;
                 DL_GPIO_clearPins(GPIO_LEDS_PORT, GPIO_LEDS_USER_LED_PIN);
             } else {
                 DL_GPIO_setPins(GPIO_LEDS_PORT, GPIO_LEDS_USER_LED_PIN);
