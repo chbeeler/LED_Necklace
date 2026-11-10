@@ -5,6 +5,7 @@
 #include "ble_control.h"
 #include "audio_engine.h"
 #include "button_controller.h"
+#include "button_settings.h"
 #include "firefly_effect.h"
 #include "led_modes.h"
 #include "led_output.h"
@@ -21,12 +22,6 @@
 #define BUTTON_WAKE_MAGIC       0xB2
 #define SYSTEM_OFF_MAGIC        0xA7
 
-static const uint16_t BRIGHTNESS_LEVELS[] = {
-  0, 5, 10, 20, 30, 50, 70, 100, 150, 250, 400
-};
-static const size_t BRIGHTNESS_LEVEL_COUNT =
-    sizeof(BRIGHTNESS_LEVELS) / sizeof(BRIGHTNESS_LEVELS[0]);
-
 extern BLEUart bleuart;   // global
 
 typedef enum {charge_current_50, charge_current_100} charge_current_setting_t;
@@ -35,7 +30,7 @@ charge_current_setting_t chargeCurrentSelection = charge_current_50;
 unsigned long lastBatSampleMs = 0;
 bool lowBattery = false;
 
-int brightness = 100;
+int brightness = ButtonSettings::DEFAULT_BRIGHTNESS;
 float sensitivityF = 8.0f;    //Scale mic loudness into LED brightness (tune this)
 bool lowPowerTest = false;
 volatile bool shutdownIrqSeen = false;
@@ -50,23 +45,7 @@ static FireflyEffect fireflyEffect;
 static void changeBrightness(bool increase)
 {
   const uint16_t current = bleGetBrightness();
-  uint16_t next = current;
-
-  if (increase) {
-    for (size_t i = 0; i < BRIGHTNESS_LEVEL_COUNT; ++i) {
-      if (BRIGHTNESS_LEVELS[i] > current) {
-        next = BRIGHTNESS_LEVELS[i];
-        break;
-      }
-    }
-  } else {
-    for (size_t i = BRIGHTNESS_LEVEL_COUNT; i > 0; --i) {
-      if (BRIGHTNESS_LEVELS[i - 1] < current) {
-        next = BRIGHTNESS_LEVELS[i - 1];
-        break;
-      }
-    }
-  }
+  const uint16_t next = ButtonSettings::stepBrightness(current, increase);
 
   if (next == current) return;
   bleSetBrightnessFromButtons(next);
@@ -80,8 +59,7 @@ static void changeSecondarySetting(bool increase)
   const uint8_t mode = getLedMode();
   if (mode == MODE_AEQ) {
     const uint8_t current = bleGetAeqIdlePercent();
-    const uint8_t next = increase ? (current < 10 ? current + 1 : 10)
-                                  : (current > 0 ? current - 1 : 0);
+    const uint8_t next = ButtonSettings::stepIdlePercent(current, increase);
     if (next == current) return;
     bleSetAeqIdlePercentFromButtons(next);
     Serial.print("AEQ idle brightness: ");
@@ -92,8 +70,7 @@ static void changeSecondarySetting(bool increase)
 
   if (mode == MODE_CONSTANT) {
     const uint16_t current = bleGetBrightness();
-    const uint16_t next = increase ? (current < 4095 ? current + 1 : 4095)
-                                   : (current > 0 ? current - 1 : 0);
+    const uint16_t next = ButtonSettings::fineBrightness(current, increase);
     if (next == current) return;
     bleSetBrightnessFromButtons(next);
     brightness = next;
