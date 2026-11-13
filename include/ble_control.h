@@ -17,6 +17,7 @@ float getFilterAlpha();
 float bleGetSensitivity();
 float bleGetNoiseFloor();
 float bleGetAeqFilterAlpha();
+uint8_t bleGetAeqSensitivity();
 uint16_t bleGetAeqReleaseMs();
 uint8_t bleGetAeqIdlePercent();
 void bleSetAeqIdlePercentFromButtons(uint8_t value);

@@ -28,6 +28,7 @@ static BLECharacteristic audioTelemetryCharacteristic("19B10160-E8F2-537E-4F6C-D
 static BLECharacteristic aeqReleaseCharacteristic("19B10170-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic aeqIdleCharacteristic("19B10180-E8F2-537E-4F6C-D104768A1214");
 static BLECharacteristic settingsResetCharacteristic("19B10190-E8F2-537E-4F6C-D104768A1214");
+static BLECharacteristic aeqSensitivityCharacteristic("19B101A0-E8F2-537E-4F6C-D104768A1214");
 #if ENABLE_NFC
 static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1214");
 #endif
@@ -37,6 +38,7 @@ static BLECharacteristic nfcUriCharacteristic("19B10150-E8F2-537E-4F6C-D104768A1
 
 static const uint16_t AEQ_RELEASE_DEFAULT_MS = 60;
 static const uint8_t AEQ_IDLE_DEFAULT_PERCENT = 4;
+static const uint8_t AEQ_SENSITIVITY_DEFAULT = 50;
 static const uint8_t RESET_AEQ_SETTINGS = 1;
 
 static uint16_t brightness = 100;
@@ -47,6 +49,7 @@ static float    aeq_filter_alpha = 0.15f;
 static float    noise_floor  = 10.0f;
 static uint16_t aeq_release_ms = AEQ_RELEASE_DEFAULT_MS;
 static uint8_t  aeq_idle_percent = AEQ_IDLE_DEFAULT_PERCENT;
+static uint8_t  aeq_sensitivity = AEQ_SENSITIVITY_DEFAULT;
 static float    vbatThres    = 3.73f;
 static uint16_t vbat_mV      = 0;
 static uint16_t vol_min      = 0;
@@ -65,6 +68,7 @@ static volatile bool g_settings_written = false;
 static volatile bool g_aeq_filter_written = false;
 static volatile bool g_aeq_release_written = false;
 static volatile bool g_aeq_idle_written = false;
+static volatile bool g_aeq_sensitivity_written = false;
 static volatile bool g_settings_reset_written = false;
 #if ENABLE_NFC
 static volatile bool g_nfc_uri_written = false;
@@ -79,6 +83,7 @@ static volatile uint8_t  g_mode_u8 = 0;
 static volatile uint32_t g_aeq_filter_u32 = 0;
 static volatile uint32_t g_aeq_release_u32 = 0;
 static volatile uint32_t g_aeq_idle_u32 = 0;
+static volatile uint32_t g_aeq_sensitivity_u32 = 0;
 static volatile uint8_t g_settings_reset_u8 = 0;
 
 static char g_settings_buf[65]; // 64 + NUL
@@ -161,6 +166,11 @@ static void cb_aeq_idle(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8
 {
   g_aeq_idle_u32 = rd_u32_le(data, len);
   g_aeq_idle_written = true;
+}
+static void cb_aeq_sensitivity(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
+{
+  g_aeq_sensitivity_u32 = rd_u32_le(data, len);
+  g_aeq_sensitivity_written = true;
 }
 static void cb_settings_reset(uint16_t /*conn_hdl*/, BLECharacteristic* /*chr*/, uint8_t* data, uint16_t len)
 {
@@ -377,6 +387,15 @@ void bleInit(uint16_t initialBrightness)
   nfcUriCharacteristic.begin();
 #endif
 
+  // Register new optional settings after all existing characteristics so
+  // their GATT handles remain stable for clients that cache the service.
+  aeqSensitivityCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  aeqSensitivityCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
+  aeqSensitivityCharacteristic.setFixedLen(4);
+  aeqSensitivityCharacteristic.setWriteCallback(cb_aeq_sensitivity);
+  aeqSensitivityCharacteristic.setUserDescriptor("AEQ sensitivity (0..100)");
+  aeqSensitivityCharacteristic.begin();
+
   // --- Initial values ---
   // NOTE: All u32 values are little-endian when written by apps/web
   brightnessCharacteristic.write32(brightness);
@@ -386,6 +405,7 @@ void bleInit(uint16_t initialBrightness)
   aeqFilterCharacteristic.write32((uint32_t)(aeq_filter_alpha * 255.0f + 0.5f));
   aeqReleaseCharacteristic.write32(aeq_release_ms);
   aeqIdleCharacteristic.write32(aeq_idle_percent);
+  aeqSensitivityCharacteristic.write32(aeq_sensitivity);
   settingsResetCharacteristic.write8(0);
   debugCharacteristic.write8(ledMode);
   vBatThresCharacteristic.write32((uint32_t)(vbatThres * 10.0f + 0.5f));
@@ -488,13 +508,23 @@ void bleUpdate()
     aeqIdleCharacteristic.write32(raw);
   }
 
+  if (g_aeq_sensitivity_written) {
+    g_aeq_sensitivity_written = false;
+    uint32_t raw = g_aeq_sensitivity_u32;
+    if (raw > 100) raw = 100;
+    aeq_sensitivity = (uint8_t)raw;
+    aeqSensitivityCharacteristic.write32(raw);
+  }
+
   if (g_settings_reset_written) {
     g_settings_reset_written = false;
     if (g_settings_reset_u8 == RESET_AEQ_SETTINGS) {
       aeq_release_ms = AEQ_RELEASE_DEFAULT_MS;
       aeq_idle_percent = AEQ_IDLE_DEFAULT_PERCENT;
+      aeq_sensitivity = AEQ_SENSITIVITY_DEFAULT;
       aeqReleaseCharacteristic.write32(aeq_release_ms);
       aeqIdleCharacteristic.write32(aeq_idle_percent);
+      aeqSensitivityCharacteristic.write32(aeq_sensitivity);
     }
     g_settings_reset_u8 = 0;
     settingsResetCharacteristic.write8(0);
@@ -589,6 +619,7 @@ uint8_t  getLedMode()               { return ledMode; }
 float    getFilterAlpha()           { return filter_alpha; }
 float    bleGetNoiseFloor()         { return noise_floor; }
 float    bleGetAeqFilterAlpha()     { return aeq_filter_alpha; }
+uint8_t  bleGetAeqSensitivity()     { return aeq_sensitivity; }
 uint16_t bleGetAeqReleaseMs()       { return aeq_release_ms; }
 uint8_t  bleGetAeqIdlePercent()     { return aeq_idle_percent; }
 void bleSetAeqIdlePercentFromButtons(uint8_t value)

@@ -426,6 +426,7 @@ void loop()
       sensitivityF,
       getFilterAlpha(),
       bleGetNoiseFloor(),
+      bleGetAeqSensitivity(),
       bleGetAeqReleaseMs(),
       bleGetAeqIdlePercent(),
     };

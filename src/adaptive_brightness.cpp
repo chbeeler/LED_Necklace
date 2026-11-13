@@ -35,6 +35,7 @@ float AdaptiveBrightness::process(const int16_t* samples,
                                   size_t sampleCount,
                                   uint32_t sampleRate,
                                   float noiseFloor,
+                                  uint8_t sensitivity,
                                   float releaseSeconds,
                                   float idleLevel)
 {
@@ -52,10 +53,12 @@ float AdaptiveBrightness::process(const int16_t* samples,
   const float dt = (float)sampleCount / (float)sampleRate;
   const float rms = sqrtf(sumSquares / (float)sampleCount + 1.0e-12f);
 
-  return processRms(rms, dt, noiseFloor, releaseSeconds, idleLevel);
+  return processRms(rms, dt, noiseFloor, sensitivity, releaseSeconds,
+                    idleLevel);
 }
 
 float AdaptiveBrightness::processRms(float rms, float dt, float noiseFloor,
+                                     uint8_t sensitivity,
                                      float releaseSeconds, float idleLevel)
 {
   if (!(dt > 0.0f) || !(rms >= 0.0f)) return output_;
@@ -90,6 +93,13 @@ float AdaptiveBrightness::processRms(float rms, float dt, float noiseFloor,
       noiseFloor > 0.0f ? noiseFloor * pcmScale : 0.0f;
   float minimumModulation = normalizedNoiseFloor * 2.0f;
   if (minimumModulation < 0.0005f) minimumModulation = 0.0005f;
+  if (sensitivity > 100) sensitivity = 100;
+  // 50 preserves the original gate. Each half-range changes the threshold by
+  // a factor of four, giving useful control over quiet rooms and noisy venues
+  // without changing the adaptive beat normalization itself.
+  const float sensitivityScale =
+      powf(4.0f, (50.0f - (float)sensitivity) / 50.0f);
+  minimumModulation *= sensitivityScale;
   const bool beatActive = envelope_ > normalizedNoiseFloor &&
                           modulationPeak_ > minimumModulation;
 

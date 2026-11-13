@@ -13,11 +13,12 @@ public:
                 size_t sampleCount,
                 uint32_t sampleRate,
                 float noiseFloor,
+                uint8_t sensitivity,
                 float releaseSeconds,
                 float idleLevel);
 
   // RMS is in full-scale units (signed PCM RMS / 32768); noiseFloor is in PCM counts.
-  float processRms(float rms, float dt, float noiseFloor,
+  float processRms(float rms, float dt, float noiseFloor, uint8_t sensitivity,
                    float releaseSeconds, float idleLevel);
 
   float envelope() const { return envelope_; }
