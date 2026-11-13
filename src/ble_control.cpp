@@ -268,8 +268,9 @@ void bleInit(uint16_t initialBrightness)
   ledService.begin();
 
   // --- Characteristics ---
-  // brightness (uint32), read/write
-  brightnessCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  // brightness (uint32), read/write/notify
+  brightnessCharacteristic.setProperties(
+      CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_NOTIFY);
   brightnessCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   brightnessCharacteristic.setFixedLen(4);
   brightnessCharacteristic.setWriteCallback(cb_brightness);
@@ -299,8 +300,9 @@ void bleInit(uint16_t initialBrightness)
   vBatCharacteristic.setUserDescriptor("Battery voltage (mV)");
   vBatCharacteristic.begin();
 
-  // mode (uint8), read/write
-  debugCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  // mode (uint8), read/write/notify
+  debugCharacteristic.setProperties(
+      CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_NOTIFY);
   debugCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   debugCharacteristic.setFixedLen(1);
   debugCharacteristic.setWriteCallback(cb_mode);
@@ -362,7 +364,8 @@ void bleInit(uint16_t initialBrightness)
   aeqReleaseCharacteristic.begin();
 
   // AEQ brightness between detected beats (uint32 percent, 0..10).
-  aeqIdleCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  aeqIdleCharacteristic.setProperties(
+      CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_NOTIFY);
   aeqIdleCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   aeqIdleCharacteristic.setFixedLen(4);
   aeqIdleCharacteristic.setWriteCallback(cb_aeq_idle);
@@ -447,6 +450,7 @@ void bleUpdate()
     if (v > 4095) v = 4095;
     brightness = (uint16_t)v;
     brightnessCharacteristic.write32(brightness);
+    brightnessCharacteristic.notify32(brightness);
     settings_dirty = true;
   }
 
@@ -506,6 +510,7 @@ void bleUpdate()
     if (raw > 10) raw = 10;
     aeq_idle_percent = (uint8_t)raw;
     aeqIdleCharacteristic.write32(raw);
+    aeqIdleCharacteristic.notify32(raw);
   }
 
   if (g_aeq_sensitivity_written) {
@@ -524,6 +529,7 @@ void bleUpdate()
       aeq_sensitivity = AEQ_SENSITIVITY_DEFAULT;
       aeqReleaseCharacteristic.write32(aeq_release_ms);
       aeqIdleCharacteristic.write32(aeq_idle_percent);
+      aeqIdleCharacteristic.notify32(aeq_idle_percent);
       aeqSensitivityCharacteristic.write32(aeq_sensitivity);
     }
     g_settings_reset_u8 = 0;
@@ -540,6 +546,7 @@ void bleUpdate()
 
     ledMode = g_mode_u8;
     debugCharacteristic.write8(ledMode);
+    debugCharacteristic.notify8(ledMode);
     if (g_mode_u8 == MODE_POWEROFF)
       lowPowerTest = true;
     settings_dirty = true;
@@ -571,9 +578,11 @@ void bleUpdate()
 
       // sync other characteristics
       brightnessCharacteristic.write32(brightness);
+      brightnessCharacteristic.notify32(brightness);
       sensitivityCharacteristic.write32((uint32_t)s);
       filterCharacteristic.write32((uint32_t)a);
       debugCharacteristic.write8(ledMode);
+      debugCharacteristic.notify8(ledMode);
 
       settings_dirty = true;
     }
@@ -603,6 +612,7 @@ void bleSetBrightnessFromButtons(uint16_t value)
   if (value > 4095) value = 4095;
   brightness = value;
   brightnessCharacteristic.write32(brightness);
+  brightnessCharacteristic.notify32(brightness);
   writeSettingsString();
 }
 
@@ -610,6 +620,7 @@ void bleSetModeFromButtons(uint8_t mode)
 {
   ledMode = mode;
   debugCharacteristic.write8(ledMode);
+  debugCharacteristic.notify8(ledMode);
   writeSettingsString();
 }
 
@@ -627,6 +638,7 @@ void bleSetAeqIdlePercentFromButtons(uint8_t value)
   if (value > 10) value = 10;
   aeq_idle_percent = value;
   aeqIdleCharacteristic.write32(aeq_idle_percent);
+  aeqIdleCharacteristic.notify32(aeq_idle_percent);
   writeSettingsString();
 }
 
