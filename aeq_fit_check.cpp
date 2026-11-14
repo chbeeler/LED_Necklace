@@ -52,7 +52,7 @@ extern "C" void runAeqFitCheck(void)
         const uint16_t start = DL_TimerA_getTimerCount(TIMA0);
 #endif
         const float output = brightness.process(pcm, blockSamples, sampleRate,
-                                                10.0f, 0.060f, 0.04f);
+                                                10.0f, 50, 0.060f, 0.04f);
 #if defined(__arm__)
         const uint16_t ticks = DL_TimerA_getTimerCount(TIMA0) - start;
         const uint32_t cycles = ticks * 8U;

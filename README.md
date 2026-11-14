@@ -2,10 +2,15 @@
 
 Use normally open switches from PA24 (Plus, J1 pin 5) and PA23 (Minus, J2 pin 12) to ground. To try the off/wake cycle on a programmed board:
 
-1. Hold both buttons for 1.5 seconds until the LED goes out, then release both. The sampling timer and ADC are powered down. The MCU waits in STANDBY0 between button edges.
+1. Hold both buttons for 1 second until the LED goes out, then release both. The sampling timer and ADC are powered down. The MCU waits in STANDBY0 between button edges.
 2. Tap either button alone, then try a short two-button press. The LED should stay off.
-3. Hold both continuously for 1.5 seconds, then release both. After 100 ms of stable release, the MCU resets and AEQ starts with its normal defaults. Check the LED response with a clap.
+3. Hold both continuously for 1 second, then release both. After 100 ms of stable release, the MCU resets and AEQ starts with its normal defaults. Check the LED response with a clap.
+
 4. Separately, hold S2 while tapping RESET to enter the loader. Use the matching UART updater with the probe option to check it, then reset without S2 to resume AEQ.
+
+## AEQ settings menu
+
+In AEQ mode, hold Minus for 1 second to enter the menu. Short Plus/Minus presses adjust the selected setting; hold Minus again to advance, and hold Plus to exit. The selections are signaled as two pulses for sensitivity, three for beat afterglow, and four for idle brightness. The menu exits after 30 seconds without input. AEQ continues reacting to music while sensitivity or afterglow is selected; idle-brightness selection holds the LED at the configured idle level.
 
 The microphone breakout still draws power if wired directly to 3.3 V. For a current measurement, distinguish the target MCU supply from the microphone, onboard debugger and other LaunchPad loads.
 
