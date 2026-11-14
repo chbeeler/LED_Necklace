@@ -20,6 +20,8 @@ float bleGetAeqFilterAlpha();
 uint8_t bleGetAeqSensitivity();
 uint16_t bleGetAeqReleaseMs();
 uint8_t bleGetAeqIdlePercent();
+void bleSetAeqSensitivityFromButtons(uint8_t value);
+void bleSetAeqReleaseMsFromButtons(uint16_t value);
 void bleSetAeqIdlePercentFromButtons(uint8_t value);
 void bleSetVolMinMax(uint16_t vol_min, uint16_t vol_max);
 void bleSetAudioTelemetry(const AudioTelemetry &telemetry);

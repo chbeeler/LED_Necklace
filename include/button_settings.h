@@ -47,4 +47,18 @@ inline uint16_t fineBrightness(uint16_t current, bool increase)
   return current > 0 ? current - 1 : 0;
 }
 
+inline uint8_t stepAeqSensitivity(uint8_t current, bool increase, bool fine)
+{
+  const uint8_t step = fine ? 1 : 5;
+  if (increase) return current <= 100 - step ? current + step : 100;
+  return current >= step ? current - step : 0;
+}
+
+inline uint16_t stepAeqReleaseMs(uint16_t current, bool increase, bool fine)
+{
+  const uint16_t step = fine ? 1 : 10;
+  if (increase) return current <= 140 - step ? current + step : 140;
+  return current >= 20 + step ? current - step : 20;
+}
+
 }  // namespace ButtonSettings

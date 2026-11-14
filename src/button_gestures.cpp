@@ -120,6 +120,12 @@ ButtonAction ButtonGestures::update(bool plusRaw, bool minusRaw, uint32_t nowMs)
     return ButtonAction::ToggleAeqConstant;
   }
 
+  if (minusPressed && !minusLongHandled &&
+      (uint32_t)(nowMs - minusState.pressedMs) >= LONG_PRESS_MS) {
+    minusLongHandled = true;
+    return ButtonAction::AdvanceAeqMenu;
+  }
+
   if (plusWasPressed && !plusPressed) {
     const bool wasLongPress = plusLongHandled;
     plusLongHandled = false;

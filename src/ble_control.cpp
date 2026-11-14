@@ -356,7 +356,8 @@ void bleInit(uint16_t initialBrightness)
   audioTelemetryCharacteristic.begin();
 
   // AEQ output release time (uint32 milliseconds, 20..140).
-  aeqReleaseCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  aeqReleaseCharacteristic.setProperties(
+      CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_NOTIFY);
   aeqReleaseCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   aeqReleaseCharacteristic.setFixedLen(4);
   aeqReleaseCharacteristic.setWriteCallback(cb_aeq_release);
@@ -392,7 +393,8 @@ void bleInit(uint16_t initialBrightness)
 
   // Register new optional settings after all existing characteristics so
   // their GATT handles remain stable for clients that cache the service.
-  aeqSensitivityCharacteristic.setProperties(CHR_PROPS_READ | CHR_PROPS_WRITE);
+  aeqSensitivityCharacteristic.setProperties(
+      CHR_PROPS_READ | CHR_PROPS_WRITE | CHR_PROPS_NOTIFY);
   aeqSensitivityCharacteristic.setPermission(SECMODE_OPEN, SECMODE_OPEN);
   aeqSensitivityCharacteristic.setFixedLen(4);
   aeqSensitivityCharacteristic.setWriteCallback(cb_aeq_sensitivity);
@@ -502,6 +504,7 @@ void bleUpdate()
     if (raw > 140) raw = 140;
     aeq_release_ms = (uint16_t)raw;
     aeqReleaseCharacteristic.write32(raw);
+    aeqReleaseCharacteristic.notify32(raw);
   }
 
   if (g_aeq_idle_written) {
@@ -519,6 +522,7 @@ void bleUpdate()
     if (raw > 100) raw = 100;
     aeq_sensitivity = (uint8_t)raw;
     aeqSensitivityCharacteristic.write32(raw);
+    aeqSensitivityCharacteristic.notify32(raw);
   }
 
   if (g_settings_reset_written) {
@@ -528,9 +532,11 @@ void bleUpdate()
       aeq_idle_percent = AEQ_IDLE_DEFAULT_PERCENT;
       aeq_sensitivity = AEQ_SENSITIVITY_DEFAULT;
       aeqReleaseCharacteristic.write32(aeq_release_ms);
+      aeqReleaseCharacteristic.notify32(aeq_release_ms);
       aeqIdleCharacteristic.write32(aeq_idle_percent);
       aeqIdleCharacteristic.notify32(aeq_idle_percent);
       aeqSensitivityCharacteristic.write32(aeq_sensitivity);
+      aeqSensitivityCharacteristic.notify32(aeq_sensitivity);
     }
     g_settings_reset_u8 = 0;
     settingsResetCharacteristic.write8(0);
@@ -633,6 +639,25 @@ float    bleGetAeqFilterAlpha()     { return aeq_filter_alpha; }
 uint8_t  bleGetAeqSensitivity()     { return aeq_sensitivity; }
 uint16_t bleGetAeqReleaseMs()       { return aeq_release_ms; }
 uint8_t  bleGetAeqIdlePercent()     { return aeq_idle_percent; }
+void bleSetAeqSensitivityFromButtons(uint8_t value)
+{
+  if (value > 100) value = 100;
+  aeq_sensitivity = value;
+  aeqSensitivityCharacteristic.write32(aeq_sensitivity);
+  aeqSensitivityCharacteristic.notify32(aeq_sensitivity);
+  writeSettingsString();
+}
+
+void bleSetAeqReleaseMsFromButtons(uint16_t value)
+{
+  if (value < 20) value = 20;
+  if (value > 140) value = 140;
+  aeq_release_ms = value;
+  aeqReleaseCharacteristic.write32(aeq_release_ms);
+  aeqReleaseCharacteristic.notify32(aeq_release_ms);
+  writeSettingsString();
+}
+
 void bleSetAeqIdlePercentFromButtons(uint8_t value)
 {
   if (value > 10) value = 10;

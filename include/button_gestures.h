@@ -8,13 +8,14 @@ enum class ButtonAction : uint8_t {
   BrightnessDown,
   SecondaryUp,
   SecondaryDown,
+  AdvanceAeqMenu,
   ToggleAeqConstant,
   RequestSystemOff,
 };
 
 class ButtonGestures {
  public:
-  static constexpr uint32_t LONG_PRESS_MS = 1500;
+  static constexpr uint32_t LONG_PRESS_MS = 1000;
   ButtonAction update(bool plusRaw, bool minusRaw, uint32_t nowMs);
   bool plusPressed() const { return plusState.stablePressed; }
   bool minusPressed() const { return minusState.stablePressed; }

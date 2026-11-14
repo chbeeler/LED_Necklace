@@ -2,6 +2,7 @@
 //#include "board_pins.h"
 
 #include "battery.h"
+#include "aeq_button_menu.h"
 #include "ble_control.h"
 #include "audio_engine.h"
 #include "button_controller.h"
@@ -41,6 +42,7 @@ static const uint32_t BLE_CTRL_UPDATE_PERIOD_MS = 20UL;
 static const uint32_t BLE_VBAT_UPDATE_PERIOD_MS = 500UL;
 
 static FireflyEffect fireflyEffect;
+static AeqButtonMenu aeqButtonMenu;
 
 static void changeBrightness(bool increase)
 {
@@ -80,6 +82,65 @@ static void changeSecondarySetting(bool increase)
   }
 
   Serial.println("Secondary adjustment ignored in this LED mode");
+}
+
+static const char *aeqMenuItemName(AeqMenuItem item)
+{
+  switch (item) {
+    case AeqMenuItem::Sensitivity: return "sensitivity";
+    case AeqMenuItem::Afterglow: return "beat afterglow";
+    case AeqMenuItem::IdleBrightness: return "idle brightness";
+    case AeqMenuItem::None: return "off";
+  }
+  return "off";
+}
+
+static void adjustAeqMenu(bool increase, bool fine, uint32_t nowMs)
+{
+  aeqButtonMenu.touch(nowMs);
+  switch (aeqButtonMenu.item()) {
+    case AeqMenuItem::Sensitivity: {
+      const uint8_t current = bleGetAeqSensitivity();
+      const uint8_t next =
+          ButtonSettings::stepAeqSensitivity(current, increase, fine);
+      if (next != current) bleSetAeqSensitivityFromButtons(next);
+      Serial.print("AEQ sensitivity: ");
+      Serial.println(next);
+      break;
+    }
+    case AeqMenuItem::Afterglow: {
+      const uint16_t current = bleGetAeqReleaseMs();
+      const uint16_t next =
+          ButtonSettings::stepAeqReleaseMs(current, increase, fine);
+      if (next != current) bleSetAeqReleaseMsFromButtons(next);
+      Serial.print("AEQ beat afterglow: ");
+      Serial.print(next);
+      Serial.println(" ms");
+      break;
+    }
+    case AeqMenuItem::IdleBrightness: {
+      const uint8_t current = bleGetAeqIdlePercent();
+      const uint8_t next = ButtonSettings::stepIdlePercent(current, increase);
+      if (next != current) bleSetAeqIdlePercentFromButtons(next);
+      Serial.print("AEQ idle brightness: ");
+      Serial.print(next);
+      Serial.println('%');
+      break;
+    }
+    case AeqMenuItem::None:
+      break;
+  }
+}
+
+static void advanceAeqMenu(uint32_t nowMs)
+{
+  if (getLedMode() != MODE_AEQ) {
+    Serial.println("AEQ settings menu ignored outside AEQ mode");
+    return;
+  }
+  aeqButtonMenu.advance(nowMs);
+  Serial.print("AEQ settings menu: ");
+  Serial.println(aeqMenuItemName(aeqButtonMenu.item()));
 }
 
 static void toggleAeqConstantMode()
@@ -416,7 +477,14 @@ void loop()
   }
   if (!low_power_condition)
   {
+    const uint32_t loopNowMs = millis();
     const uint8_t activeLedMode = getLedMode();
+    if (aeqButtonMenu.active() && activeLedMode != MODE_AEQ) {
+      aeqButtonMenu.exit(loopNowMs);
+      Serial.println("AEQ settings menu exited after mode change");
+    } else if (aeqButtonMenu.update(loopNowMs)) {
+      Serial.println("AEQ settings menu timed out");
+    }
     const bool effectOwnsLeds =
         activeLedMode == MODE_FIREFLY || NfcService::effectActive();
 
@@ -431,7 +499,7 @@ void loop()
       bleGetAeqIdlePercent(),
     };
     const AudioResult audioResult =
-        AudioEngine::update(audioSettings, !effectOwnsLeds, millis());
+        AudioEngine::update(audioSettings, !effectOwnsLeds, loopNowMs);
     if (audioResult.volumeRangeReady) {
       bleSetVolMinMax(audioResult.volumeMin, audioResult.volumeMax);
     }
@@ -446,8 +514,15 @@ void loop()
         LedOutput::write(nfcBrightness);
       }
     } else {
-      if (activeLedMode == MODE_FIREFLY) {
-        LedOutput::write(fireflyEffect.update(millis(), brightness));
+      float menuFeedbackLevel = 0.0f;
+      if (aeqButtonMenu.feedbackLevel(loopNowMs, menuFeedbackLevel)) {
+        const uint16_t cueBrightness = brightness > 0 ? brightness : 100;
+        LedOutput::write((uint32_t)(menuFeedbackLevel * cueBrightness));
+      } else if (aeqButtonMenu.forcesIdleOutput()) {
+        LedOutput::write(
+            (uint32_t)brightness * bleGetAeqIdlePercent() / 100U);
+      } else if (activeLedMode == MODE_FIREFLY) {
+        LedOutput::write(fireflyEffect.update(loopNowMs, brightness));
       } else {
         fireflyEffect.reset();
         if (audioResult.ledValueReady) {
@@ -472,23 +547,37 @@ void loop()
       bleSetVBat_mV(getBatteryVoltage_mV());
     }
 #endif
-    switch (ButtonController::update(millis())) {
+    const uint32_t buttonNowMs = millis();
+    switch (ButtonController::update(buttonNowMs)) {
       case ButtonAction::BrightnessUp:
-        changeBrightness(true);
+        if (aeqButtonMenu.active()) adjustAeqMenu(true, false, buttonNowMs);
+        else changeBrightness(true);
         break;
       case ButtonAction::BrightnessDown:
-        changeBrightness(false);
+        if (aeqButtonMenu.active()) adjustAeqMenu(false, false, buttonNowMs);
+        else changeBrightness(false);
         break;
       case ButtonAction::SecondaryUp:
-        changeSecondarySetting(true);
+        if (aeqButtonMenu.active()) adjustAeqMenu(true, true, buttonNowMs);
+        else changeSecondarySetting(true);
         break;
       case ButtonAction::SecondaryDown:
-        changeSecondarySetting(false);
+        if (aeqButtonMenu.active()) adjustAeqMenu(false, true, buttonNowMs);
+        else changeSecondarySetting(false);
+        break;
+      case ButtonAction::AdvanceAeqMenu:
+        advanceAeqMenu(buttonNowMs);
         break;
       case ButtonAction::ToggleAeqConstant:
-        toggleAeqConstantMode();
+        if (aeqButtonMenu.active()) {
+          aeqButtonMenu.exit(buttonNowMs);
+          Serial.println("AEQ settings menu exited");
+        } else {
+          toggleAeqConstantMode();
+        }
         break;
       case ButtonAction::RequestSystemOff:
+        aeqButtonMenu.cancel();
         requestButtonSystemOff();
         break;
       case ButtonAction::None:
