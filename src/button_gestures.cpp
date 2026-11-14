@@ -36,6 +36,15 @@ ButtonAction ButtonGestures::update(bool plusRaw, bool minusRaw, uint32_t nowMs)
   if (!plusWasPressed && plusPressed) plusLongHandled = false;
   if (!minusWasPressed && minusPressed) minusLongHandled = false;
 
+  // Any overlap consumes both physical press cycles, even when the second
+  // press is too short to pass debounce. In particular, Plus must be released
+  // and pressed again before it can become a mode-changing long press.
+  if (plusRaw && minusRaw) {
+    mixedPressCycle = true;
+    plusLongHandled = true;
+    minusLongHandled = true;
+  }
+
   if (plusPressed && minusPressed) {
     if (!chordActive) {
       chordActive = true;
@@ -85,7 +94,20 @@ ButtonAction ButtonGestures::update(bool plusRaw, bool minusRaw, uint32_t nowMs)
     if (!plusPressed && !minusPressed) {
       chordActive = false;
       chordHandled = false;
+      mixedPressCycle = false;
       chordModifier = ChordModifier::None;
+      plusLongHandled = false;
+      minusLongHandled = false;
+    }
+    return ButtonAction::None;
+  }
+
+  // Raw overlap can be shorter than the debouncer's stable-press window. It
+  // still blocks individual short/long actions until both buttons complete a
+  // full release, preventing a modifier attempt from becoming a mode toggle.
+  if (mixedPressCycle) {
+    if (!plusRaw && !minusRaw && !plusPressed && !minusPressed) {
+      mixedPressCycle = false;
       plusLongHandled = false;
       minusLongHandled = false;
     }

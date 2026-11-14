@@ -39,6 +39,7 @@ class ButtonGestures {
   bool minusLongHandled = false;
   bool chordActive = false;
   bool chordHandled = false;
+  bool mixedPressCycle = false;
   uint32_t chordStartedMs = 0;
   ChordModifier chordModifier = ChordModifier::None;
   static void updateButton(ButtonState &state, bool rawPressed, uint32_t nowMs);
