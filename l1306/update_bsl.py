@@ -80,8 +80,9 @@ def verify(port, address, data):
         raise IOError(f"CRC verification failed at {address:#x}: {response.hex()}")
 
 
-def update(port, data, connected=False):
-    identify(port, connected)
+def update(port, data, connected=False, identified=False):
+    if not identified:
+        identify(port, connected)
     # One password attempt only. Abort on any error; never try factory reset.
     ok(port, b"\x21" + b"\xff" * 32)
     ok(port, b"\x23" + struct.pack("<II", 0, 0xffff))
@@ -106,8 +107,14 @@ def wait_for_bootloader(port, seconds):
             port.reset_input_buffer()
             try:
                 command(port, b"\x12", False)
-                return
-            except TimeoutError:
+                # A stray zero during reset is not proof of a BSL connection.
+                # Require a complete CRC-checked identity before any unlock/write.
+                port.timeout = previous_timeout
+                return identify(port, connected=True)
+            except serial.SerialException:
+                raise
+            except (TimeoutError, IOError):
+                port.timeout = 0.3
                 continue
         raise TimeoutError("No BSL connection received; no flash erased")
     finally:
@@ -127,10 +134,8 @@ def main():
     data = None if args.probe else application(args.image)
     with serial.Serial(args.port, 9600, timeout=3, write_timeout=3) as port:
         wait_for_bootloader(port, args.wait)
-        if args.probe:
-            identify(port, connected=True)
-        else:
-            update(port, data, connected=True)
+        if not args.probe:
+            update(port, data, connected=True, identified=True)
 
 
 if __name__ == "__main__":
