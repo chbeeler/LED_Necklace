@@ -44,6 +44,8 @@ def main():
                     "-Wl,--rom_model", "-Wl,--warn_sections",
                     "-Wl,-m,AEQ_L1306.map", "-o", "AEQ_L1306.out", "-llibc.a"],
                    cwd=build, check=True)
+    subprocess.run([str(compiler / "bin/tiarmobjcopy.exe"), "-O", "binary",
+                    "AEQ_L1306.out", "AEQ_L1306.bin"], cwd=build, check=True)
     print(build / "AEQ_L1306.out")
 
 if __name__ == "__main__":

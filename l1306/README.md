@@ -101,3 +101,42 @@ line is dropped and menuDebugDroppedLines increments. C1104 keeps a silent hook.
 The host regression test in tests/menu_report_test.cpp checks menu events,
 values and absence of repeated output; link with ../aeq_led.cpp and the shared
 adaptive_brightness.cpp/button_gestures.cpp, with the necklace include directory.
+
+## ROM BSL updates
+
+The L1306 uses its factory ROM BSL, not the C1104 flash loader. With power off,
+remove J101 RXD/TXD shunts and wire their XDS110-side pins: RXD to PA22, TXD to
+PA23 (labels describe the target direction). Remove J6 to isolate PA22 from the
+photodiode circuit. Keep J11 for S1. Existing OPA microphone wiring stays in place.
+
+Build with python build.py to generate Debug/AEQ_L1306.bin. A CCS-only build does
+not regenerate this binary; run build.py before using this updater.
+Install pyserial, close serial terminals and stop CCS debugging, then run:
+
+    python l1306/update_bsl.py COM45
+
+After Listening appears, hold S1, tap/release RESET, then release S1. The script
+waits up to 120 seconds; the ROM requires a connection within 10 seconds of entry.
+Use --probe to identify only, or --image PATH to select another MAIN-only binary
+linked at address zero. The ROM identity check validates the expected configuration
+and buffer size, not the exact silicon part number: use this tool only on L1306.
+
+The updater uses 9600 baud, CRC32 framing and the factory all-FF password. It makes
+one password attempt, erases MAIN only, programs/verifies the body before writing
+the reset vectors, verifies the full image CRC, then starts the application.
+It never issues factory-reset or NONMAIN-write commands. Do not use the default
+password after changing the device's BSL password. Interrupted updates can be
+retried by invoking ROM BSL again; there is no rollback image.
+
+After success, menu output is at 115200 baud:
+
+    python -m serial.tools.miniterm COM45 115200
+
+Exit the monitor with Ctrl+] before updating again. Python and pyserial suffice
+for flashing an existing binary; UniFlash/CCS are not required by the updater.
+The user confirmed successful BSL flashing and operation of the new firmware.
+Protocol regression check (no hardware access):
+
+    python l1306/tests/bsl_protocol_test.py
+
+Protocol reference: https://www.ti.com/lit/ug/slau887a/slau887a.pdf
