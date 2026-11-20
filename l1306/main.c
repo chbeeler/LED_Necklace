@@ -4,6 +4,7 @@
 #include "ti_msp_dl_config.h"
 
 void menuDebugPoll(void);
+void menuDebugMeasure(const AudioWindow *window);
 bool updateButtons(bool plus, bool minus, uint32_t nowMs);
 float updateLedBrightness(float adcRms, uint16_t windowLength);
 extern volatile float micNoiseFloor;
@@ -42,6 +43,7 @@ int main(void)
             __WFE();
             continue;
         }
+        menuDebugMeasure(&window);
         micOpa = window.opa;
         micRaw = window.raw;
         if (window.opa.rms > micOpaRmsPeak) micOpaRmsPeak = window.opa.rms;

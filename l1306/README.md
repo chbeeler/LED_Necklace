@@ -140,3 +140,48 @@ Protocol regression check (no hardware access):
     python l1306/tests/bsl_protocol_test.py
 
 Protocol reference: https://www.ti.com/lit/ug/slau887a/slau887a.pdf
+
+## Silence and quiet-music measurements
+
+Build with build.py and update via BSL as above. Close miniterm before capture.
+From the repository root, keep the microphone still in a quiet room, then run:
+
+    python l1306/capture_noise.py COM45 quiet --output captures/quiet.csv
+
+Next play the quietest music you want detected, at the intended distance/volume:
+
+    python l1306/capture_noise.py COM45 music --output captures/music.csv --compare captures/quiet.csv
+
+Both captures default to 20 seconds. Existing files are never overwritten: use
+another --output filename to repeat. Keep hardware, gain and microphone position
+unchanged; do not press buttons during recording. This mode measures the current
+circuit, including its missing external low-pass filter. Both channels are read
+before AEQ noise-floor subtraction or sensitivity processing.
+
+The script sends M to start and X to stop measurement at 115200 baud. Reset also
+turns measurement off. Menu messages remain available outside recording. The TX
+queue is now 256 bytes. The LED algorithm and its sensitivity range are unchanged.
+The firmware emits N1 CSV summaries after each 16 audio windows (256 ms). Each
+channel reports average DC, RMS from the average of the 16 window powers, maximum
+16 ms RMS, and ADC min/max. DC and RMS fields on the wire are counts times 1000;
+the saved CSV uses ADC counts. At the 2.5 V reference, one count is about 0.610 mV
+at the ADC input. OPA values are amplified; raw values are not. Do not compare their
+counts directly as an OPA gain/noise estimate without accounting for bandwidth,
+ADC quantization and actual gain.
+
+Each summary also carries sequence/time and cumulative missed-block, ADC overrun,
+trigger overrun and UART-drop counters. The host flags errors; repeat a recording
+from a fresh reset if counters are nonzero. It does not record raw waveforms or
+count AEQ false flashes. The reported percentage describes 256 ms summaries
+containing at least one 16 ms window above the quiet capture's maximum window RMS.
+
+Comparison estimates signal RMS as sqrt(max(music_RMS^2 - quiet_RMS^2, 0)), assuming
+independent and unchanged background noise. It reports 20*log10(signal/noise) dB
+and log2(signal/noise) amplitude bits, not ADC ENOB. This measures the complete
+microphone/room/amplifier/ADC system. A separate correctly biased quiet-input test
+is needed to isolate amplifier noise.
+
+Measurement build: 15864 bytes flash and 1748 bytes allocated RAM (including the
+256-byte stack reservation). Build and host simulations passed; streaming under
+real hardware load remains to be verified by the capture error counters.
+Host analysis regression: python l1306/tests/noise_capture_test.py
