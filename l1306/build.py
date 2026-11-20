@@ -20,6 +20,7 @@ def main():
                     str(project / "board.syscfg")], check=True)
     sources = sorted(project.glob("*.c")) + sorted(project.glob("*.cpp"))
     sources += sorted(build.glob("*.c"))
+    sources.append(args.sdk / "source/ti/devices/msp/m0p/startup_system_files/ticlang/startup_mspm0l130x_ticlang.c")
     for link in ET.parse(project / ".project").findall(".//link"):
         uri = link.findtext("locationURI")
         prefix, relative = uri.split("-PROJECT_LOC/", 1)
