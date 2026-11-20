@@ -1,6 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
   <name>AEQ_L1306</name>
-  <buildSpec><buildCommand><name>org.eclipse.cdt.managedbuilder.core.genmakebuilder</name><arguments/></buildCommand></buildSpec>
-  <natures><nature>com.ti.ccstudio.core.ccsNature</nature><nature>org.eclipse.cdt.core.cnature</nature><nature>org.eclipse.cdt.core.ccnature</nature></natures>
+  <buildSpec>
+    <buildCommand>
+      <name>org.eclipse.cdt.managedbuilder.core.genmakebuilder</name>
+      <arguments />
+    </buildCommand>
+  </buildSpec>
+  <natures>
+    <nature>com.ti.ccstudio.core.ccsNature</nature>
+    <nature>org.eclipse.cdt.core.cnature</nature>
+    <nature>org.eclipse.cdt.managedbuilder.core.managedBuildNature</nature>
+    <nature>org.eclipse.cdt.core.ccnature</nature>
+  </natures>
+  <linkedResources>
+    <link>
+      <name>aeq_led.cpp</name>
+      <type>1</type>
+      <locationURI>PARENT-1-PROJECT_LOC/aeq_led.cpp</locationURI>
+    </link>
+    <link>
+      <name>adaptive_brightness.cpp</name>
+      <type>1</type>
+      <locationURI>PARENT-3-PROJECT_LOC/LED_Necklace/src/adaptive_brightness.cpp</locationURI>
+    </link>
+    <link>
+      <name>button_gestures.cpp</name>
+      <type>1</type>
+      <locationURI>PARENT-3-PROJECT_LOC/LED_Necklace/src/button_gestures.cpp</locationURI>
+    </link>
+  </linkedResources>
 </projectDescription>

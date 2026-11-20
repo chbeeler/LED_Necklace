@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<cproject storage_type_id="org.eclipse.cdt.core.XmlProjectDescriptionStorage">
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<?fileVersion 4.0.0?><cproject storage_type_id="org.eclipse.cdt.core.XmlProjectDescriptionStorage">
     <storageModule moduleId="org.eclipse.cdt.core.settings">
         <cconfiguration id="com.ti.ccstudio.buildDefinitions.TMS470.Debug.56509808">
             <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.ti.ccstudio.buildDefinitions.TMS470.Debug.56509808" moduleId="org.eclipse.cdt.core.settings" name="Debug">
@@ -91,13 +91,13 @@
                         </toolChain>
                     </folderInfo>
                     <sourceEntries>
-                        <entry excluding="Debug" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="" />
+                        <entry excluding="Debug|tests" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="" />
                     </sourceEntries>
                 </configuration>
             </storageModule>
             <storageModule moduleId="org.eclipse.cdt.core.externalSettings" />
         </cconfiguration>
-        </storageModule>
+    </storageModule>
     <storageModule moduleId="cdtBuildSystem" version="4.0.0">
         <project id="AEQ.com.ti.ccstudio.buildDefinitions.TMS470.ProjectType.1473693475" name="TMS470" projectType="com.ti.ccstudio.buildDefinitions.TMS470.ProjectType" />
     </storageModule>

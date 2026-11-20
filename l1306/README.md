@@ -31,3 +31,60 @@ a reset, because debugger halts can still interrupt an in-flight conversion.
 On the attached board, a ten-second run with the Adafruit SPW2430 connected to
 both inputs produced matching means near 1402 counts and zero overrun/missed-block
 counters. This circuit currently has no external microphone low-pass filter.
+
+## Shared application
+
+The CCS links reuse aeq_led.cpp from the C1104 project and adaptive_brightness.cpp
+and button_gestures.cpp from the sibling LED_Necklace repository. Keep that
+repository at C:/Daten/LED_Necklace (or preserve the equivalent relative layout).
+No copies of the shared algorithm or button implementation are maintained here.
+
+OPA RMS is divided by micOpaGain (initially 16), then converted from the 2.5 V
+ADC reference to equivalent counts at 3.3 V for the shared application's input.
+Initial SPW2430 settings are micNoiseFloor=0.25 and micInputGain=12.
+An OPA minimum below 256 or maximum above 3967 selects the raw channel for the
+whole window. Eight consecutive windows inside 384..3839 restore the OPA path.
+These margins and the nominal gain need validation with loud signals and the
+final microphone/filter circuit. Firmware cannot recover microphone clipping.
+
+The shared default brightness is 100/4095. ledDisplayGain=16 makes the LaunchPad
+LED easier to see; it is a board display setting, not microphone gain.
+S1/S2 short presses increase/decrease brightness. Hold S1 for one second to
+switch AEQ/constant mode. Hold S2 for one second to advance the AEQ settings menu.
+The shared modifier gestures also remain available. Shutdown is not implemented
+in this target yet; the application's two-button power-off request is ignored.
+
+Watch micInputRms, micUsingRaw, micRangeChanges, micRawClippedWindows,
+micOpaRmsPeak, micRawRmsPeak, ledBrightness, ledBrightnessPeak and ledDuty.
+Peak values reset when the application restarts.
+
+## Validation
+
+Both build.py and a CCS command-line import/build passed with SDK 2.11.00.07,
+SysConfig 1.28.1 and TI Arm Clang 5.1.1.LTS. The integrated application uses
+9760 bytes of flash and 1247 bytes of allocated RAM, including the linker-default
+256-byte stack reservation. Stack high-water usage has not yet been measured.
+The factory NONMAIN configuration was compared before/after programming and
+remained unchanged. Flash this target with Erase MAIN memory only.
+
+Ten-second SPW2430 tests on the connected LaunchPad (no external low-pass filter):
+- Quiet: OPA window RMS peak 6.40 counts; raw RMS peak 3.47 counts. LED stayed
+  at idle (0.0009768 before display gain), with no brightness spikes.
+- Music: OPA window RMS peak 22.41 counts; raw RMS peak 4.87 counts. LED peak
+  0.02360, about 97% of the default 100/4095 brightness limit.
+- Both runs: zero missed DMA blocks, ADC overruns or trigger overruns.
+- Neither run clipped the OPA; physical range-switching remains to be tested.
+
+These RMS peaks are the largest 16 ms windows, not averaged microphone noise
+specifications. The unfiltered circuit can alias out-of-band sound/noise.
+
+The standalone host test tests range normalization, both clipping rails,
+recovery hysteresis and invalid gain overrides. For example, from this folder:
+
+    gcc -std=c11 -Wall -Wextra -Werror -I. tests/audio_range_test.c audio_range.c -lm -o range_test.exe
+    ./range_test.exe
+
+Keep host test executables outside the source directory when committing.
+
+The user also verified S1 long-press AEQ/constant switching and S1/S2 brightness
+adjustment on the board after the music test.
