@@ -4,6 +4,10 @@
 #include "button_settings.h"
 #include "led_modes.h"
 
+// Boards may override this hook to report menu events without coupling UART
+// drivers to the shared application. The C1104 keeps the default silent hook.
+extern "C" __attribute__((weak)) void reportAeqMenu(const char *, uint16_t) {}
+
 namespace {
 AdaptiveBrightness liveBrightness;
 ButtonGestures buttons;
@@ -14,6 +18,16 @@ uint8_t aeqSensitivity = 50;
 uint16_t aeqAfterglowMs = 60;
 LedMode mode = MODE_AEQ;
 uint32_t lastNowMs = 0;
+
+void reportMenu()
+{
+    switch (menu.item()) {
+    case AeqMenuItem::Sensitivity: reportAeqMenu("SENS", aeqSensitivity); break;
+    case AeqMenuItem::Afterglow: reportAeqMenu("GLOW", aeqAfterglowMs); break;
+    case AeqMenuItem::IdleBrightness: reportAeqMenu("IDLE", idlePercent); break;
+    case AeqMenuItem::None: break;
+    }
+}
 
 void adjustMenu(bool increase, bool fine)
 {
@@ -31,6 +45,7 @@ void adjustMenu(bool increase, bool fine)
     case AeqMenuItem::None:
         break;
     }
+    reportMenu();
 }
 }
 
@@ -62,7 +77,10 @@ extern "C" bool updateButtons(bool plus, bool minus, uint32_t nowMs)
             brightnessLimit = ButtonSettings::fineBrightness(brightnessLimit, action == ButtonAction::SecondaryUp);
         break;
     case ButtonAction::AdvanceAeqMenu:
-        if (mode == MODE_AEQ) menu.advance(nowMs);
+        if (mode == MODE_AEQ) {
+            menu.advance(nowMs);
+            reportMenu();
+        }
         break;
     case ButtonAction::ToggleAeqConstant:
         if (menu.active())

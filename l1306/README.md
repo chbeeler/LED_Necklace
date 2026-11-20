@@ -88,3 +88,16 @@ Keep host test executables outside the source directory when committing.
 
 The user also verified S1 long-press AEQ/constant switching and S1/S2 brightness
 adjustment on the board after the music test.
+
+## Menu serial output
+
+UART0 TX is PA23 and RX is PA22, sharing the factory BSL wiring. The application
+uses 115200 baud, 8N1. Open the XDS110 Application/User UART (currently COM45).
+On menu entry/selection and each adjustment, one line reports only that setting:
+SENS: 50 (sensitivity), GLOW: 60 (milliseconds), or IDLE: 4 (percent).
+Normal brightness presses outside the menu produce no messages.
+The main loop drains a 64-byte queue without blocking audio. If full, a complete
+line is dropped and menuDebugDroppedLines increments. C1104 keeps a silent hook.
+The host regression test in tests/menu_report_test.cpp checks menu events,
+values and absence of repeated output; link with ../aeq_led.cpp and the shared
+adaptive_brightness.cpp/button_gestures.cpp, with the necklace include directory.

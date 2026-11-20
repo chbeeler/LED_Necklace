@@ -86,3 +86,13 @@ adc.peripheral.$assign = "ADC0";
 adc.peripheral.adcPin9.$assign = "PA15";
 adc.DMA_CHANNEL.$name = "AUDIO_DMA";
 adc.DMA_CHANNEL.addressMode = "f2b";
+
+// Application diagnostics share the factory BSL UART wires.
+const UART = scripting.addModule("/ti/driverlib/UART", {}, false);
+const debugUart = UART.addInstance();
+debugUart.$name = "DEBUG_UART";
+debugUart.targetBaudRate = 115200;
+debugUart.enableFIFO = true;
+debugUart.peripheral.$assign = "UART0";
+debugUart.peripheral.txPin.$assign = "PA23";
+debugUart.peripheral.rxPin.$assign = "PA22";

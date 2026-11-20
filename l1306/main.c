@@ -3,6 +3,7 @@
 #include "audio_range.h"
 #include "ti_msp_dl_config.h"
 
+void menuDebugPoll(void);
 bool updateButtons(bool plus, bool minus, uint32_t nowMs);
 float updateLedBrightness(float adcRms, uint16_t windowLength);
 extern volatile float micNoiseFloor;
@@ -35,6 +36,7 @@ int main(void)
     micInputGain = 12.0f;
     audioStart();
     for (;;) {
+        menuDebugPoll();
         AudioWindow window;
         if (!audioPollWindow(&window)) {
             __WFE();
