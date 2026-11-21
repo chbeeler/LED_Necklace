@@ -19,16 +19,13 @@ led.peripheral.ccp1Pin.$assign = "PA13";
 const GPIO = scripting.addModule("/ti/driverlib/GPIO", {}, false);
 const buttons = GPIO.addInstance();
 buttons.$name = "GPIO_BUTTONS";
-buttons.associatedPins.create(2);
-buttons.associatedPins[0].$name = "PLUS";
-buttons.associatedPins[0].assignedPin = "18";
+buttons.associatedPins.create(1);
+buttons.associatedPins[0].$name = "MINUS";
+buttons.associatedPins[0].assignedPin = "14";
 buttons.associatedPins[0].direction = "INPUT";
-buttons.associatedPins[1].$name = "MINUS";
-buttons.associatedPins[1].assignedPin = "14";
-buttons.associatedPins[1].direction = "INPUT";
-buttons.associatedPins[1].internalResistor = "PULL_UP";
+buttons.associatedPins[0].internalResistor = "PULL_UP";
 
-// A timer event starts one OPA/raw pair. MEM1 waits for the next event.
+// Each event starts OPA/raw/GPAMP/GPAMP. The fourth conversion pads FIFO packing.
 const TIMER = scripting.addModule("/ti/driverlib/TIMER", {}, false);
 const sampleTimer = TIMER.addInstance();
 sampleTimer.$name = "AUDIO_TIMER";
@@ -61,11 +58,19 @@ adc.sampClkSrc = "DL_ADC12_CLOCK_ULPCLK";
 adc.sampClkDiv = "DL_ADC12_CLOCK_DIVIDE_8";
 adc.samplingOperationMode = "sequence";
 adc.repeatMode = true;
-adc.endAdd = 1;
+adc.endAdd = 3;
 adc.adcMem0chansel = "DL_ADC12_INPUT_CHAN_12";
 adc.adcMem1chansel = "DL_ADC12_INPUT_CHAN_9";
 adc.adcMem0trig = "DL_ADC12_TRIGGER_MODE_AUTO_NEXT";
-adc.adcMem1trig = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
+adc.adcMem1trig = "DL_ADC12_TRIGGER_MODE_AUTO_NEXT";
+adc.adcMem2trig = "DL_ADC12_TRIGGER_MODE_AUTO_NEXT";
+adc.adcMem3trig = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
+adc.adcMem2chansel = "DL_ADC12_INPUT_CHAN_14";
+adc.adcMem3chansel = "DL_ADC12_INPUT_CHAN_14";
+adc.adcMem2vref = "VREF";
+adc.adcMem3vref = "VREF";
+adc.adcMem2vrefDependencySelect = "DL_ADC12_REFERENCE_VOLTAGE_INTREF";
+adc.adcMem3vrefDependencySelect = "DL_ADC12_REFERENCE_VOLTAGE_INTREF";
 adc.adcMem1stime = "DL_ADC12_SAMPLE_TIMER_SOURCE_SCOMP1";
 adc.adcMem0vref = "VREF";
 adc.adcMem1vref = "VREF";
@@ -87,7 +92,7 @@ adc.peripheral.adcPin9.$assign = "PA15";
 adc.DMA_CHANNEL.$name = "AUDIO_DMA";
 adc.DMA_CHANNEL.addressMode = "f2b";
 
-// Application diagnostics share the factory BSL UART wires.
+// Application RX moves to PA9; PA22 is reserved for the GPAMP output.
 const UART = scripting.addModule("/ti/driverlib/UART", {}, false);
 const debugUart = UART.addInstance();
 debugUart.$name = "DEBUG_UART";
@@ -95,4 +100,4 @@ debugUart.targetBaudRate = 115200;
 debugUart.enableFIFO = true;
 debugUart.peripheral.$assign = "UART0";
 debugUart.peripheral.txPin.$assign = "PA23";
-debugUart.peripheral.rxPin.$assign = "PA22";
+debugUart.peripheral.rxPin.$assign = "PA9";

@@ -12,6 +12,7 @@ typedef struct {
 typedef struct {
     AudioLevel opa;
     AudioLevel raw;
+    AudioLevel gpamp;
     uint32_t timeMs;
 } AudioWindow;
 void audioStart(void);

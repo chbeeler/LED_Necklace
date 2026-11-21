@@ -6,4 +6,5 @@ void boardInit(void);
 bool boardPlusPressed(void);
 bool boardMinusPressed(void);
 void boardSetLed(uint16_t duty);
+void boardGpampEnable(bool enable);
 #endif

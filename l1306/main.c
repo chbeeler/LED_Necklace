@@ -14,6 +14,7 @@ volatile bool buttonPlus;
 volatile bool buttonMinus;
 volatile AudioLevel micOpa;
 volatile AudioLevel micRaw;
+volatile AudioLevel micGpamp;
 volatile float micOpaGain = 16.0f;
 volatile float micInputRms;
 volatile bool micUsingRaw;
@@ -46,6 +47,7 @@ int main(void)
         menuDebugMeasure(&window);
         micOpa = window.opa;
         micRaw = window.raw;
+        micGpamp = window.gpamp;
         if (window.opa.rms > micOpaRmsPeak) micOpaRmsPeak = window.opa.rms;
         if (window.raw.rms > micRawRmsPeak) micRawRmsPeak = window.raw.rms;
         const bool wasRaw = range.useRaw;

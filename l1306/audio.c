@@ -6,7 +6,7 @@
 #error "The audio IRQ handler requires DMA channel 0"
 #endif
 
-enum { BLOCK_PAIRS = 64, ADC_MAX = 4095 };
+enum { BLOCK_WORDS = 64, BLOCK_FRAMES = 32, ADC_MAX = 4095 };
 typedef struct {
     uint32_t sum;
     uint32_t sumSquares;
@@ -14,15 +14,16 @@ typedef struct {
     uint16_t maximum;
 } Accumulator;
 
-// FIFO packs the first (OPA) sample in bits 15:0 and raw in bits 31:16.
+// Two FIFO words per frame: OPA/raw, then GPAMP/discarded GPAMP repeat.
 // The ISR rearms the alternate buffer before processing the completed block.
-static volatile uint32_t buffers[2][BLOCK_PAIRS];
-static uint32_t snapshot[BLOCK_PAIRS];
+static volatile uint32_t buffers[2][BLOCK_WORDS];
+static uint32_t snapshot[BLOCK_WORDS];
 static volatile uint8_t activeBuffer;
 static volatile uint8_t readyBuffer;
 static volatile bool blockReady;
 static Accumulator opa = {.minimum = ADC_MAX};
 static Accumulator raw = {.minimum = ADC_MAX};
+static Accumulator gpamp = {.minimum = ADC_MAX};
 static uint16_t accumulatedPairs;
 static uint32_t lastBlock;
 
@@ -35,7 +36,7 @@ volatile uint32_t micWindows;
 static void armBuffer(uint8_t index)
 {
     DL_DMA_setDestAddr(DMA, AUDIO_DMA_CHAN_ID, (uint32_t)buffers[index]);
-    DL_DMA_setTransferSize(DMA, AUDIO_DMA_CHAN_ID, BLOCK_PAIRS);
+    DL_DMA_setTransferSize(DMA, AUDIO_DMA_CHAN_ID, BLOCK_WORDS);
     DL_DMA_enableChannel(DMA, AUDIO_DMA_CHAN_ID);
 }
 
@@ -87,7 +88,7 @@ bool audioPollWindow(AudioWindow *window)
     const uint32_t sequence = micDmaBlocks;
     // DMA writes the other buffer. The masked ISR cannot recycle this one
     // during the short copy; no floating-point work runs with IRQs masked.
-    for (unsigned i = 0; i < BLOCK_PAIRS; ++i)
+    for (unsigned i = 0; i < BLOCK_WORDS; ++i)
         snapshot[i] = buffers[readyBuffer][i];
     blockReady = false;
     __set_PRIMASK(mask);
@@ -95,20 +96,24 @@ bool audioPollWindow(AudioWindow *window)
     if (sequence != lastBlock + 1) {
         opa = (Accumulator){.minimum = ADC_MAX};
         raw = (Accumulator){.minimum = ADC_MAX};
+        gpamp = (Accumulator){.minimum = ADC_MAX};
         accumulatedPairs = 0;
     }
     lastBlock = sequence;
-    for (unsigned i = 0; i < BLOCK_PAIRS; ++i) {
+    for (unsigned i = 0; i < BLOCK_WORDS; i += 2) {
         accumulate(&opa, (uint16_t)(snapshot[i] & ADC_MAX));
         accumulate(&raw, (uint16_t)((snapshot[i] >> 16) & ADC_MAX));
+        accumulate(&gpamp, (uint16_t)(snapshot[i+1] & ADC_MAX));
     }
-    accumulatedPairs += BLOCK_PAIRS;
+    accumulatedPairs += BLOCK_FRAMES;
     if (accumulatedPairs < AUDIO_WINDOW_PAIRS) return false;
     window->opa = finish(&opa);
     window->raw = finish(&raw);
-    window->timeMs = sequence * (BLOCK_PAIRS * 1000 / AUDIO_SAMPLE_RATE);
+    window->gpamp = finish(&gpamp);
+    window->timeMs = sequence * (BLOCK_FRAMES * 1000 / AUDIO_SAMPLE_RATE);
     opa = (Accumulator){.minimum = ADC_MAX};
     raw = (Accumulator){.minimum = ADC_MAX};
+    gpamp = (Accumulator){.minimum = ADC_MAX};
     accumulatedPairs = 0;
     ++micWindows;
     return true;
