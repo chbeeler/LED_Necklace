@@ -53,6 +53,17 @@ final microphone/filter circuit. Firmware cannot recover microphone clipping.
 
 The shared default brightness is 100/4095. ledDisplayGain=16 makes the LaunchPad
 LED easier to see; it is a board display setting, not microphone gain.
+
+LED PWM edges that fall inside an ADC acquisition disturb that sample. With the
+former free-running 4096-count PWM this added about 26 counts RMS to the OPA
+channel in silence, against about 3.4 counts with the PWM stopped. The PWM now
+runs at one period per ADC frame (2000 counts, 16 kHz), phase-aligned so the
+turn-on edge falls in the idle gap after a frame's conversions. The turn-off
+edge still moves with the duty, but it hits every frame at the same point, so
+it adds a constant offset, not noise. A new duty is applied by the DMA
+interrupt only between two 16 ms windows, one window after it was computed.
+The 0..4095 brightness scale is kept; the PWM resolves 2000 steps of it.
+This behaviour has host tests only and still needs a hardware noise capture.
 S1/S2 short presses increase/decrease brightness. Hold S1 for one second to
 switch AEQ/constant mode. Hold S2 for one second to advance the AEQ settings menu.
 The shared modifier gestures also remain available. Shutdown is not implemented

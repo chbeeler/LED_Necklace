@@ -5,7 +5,9 @@
 void boardInit(void);
 bool boardPlusPressed(void);
 bool boardMinusPressed(void);
+// Stores the duty (0..4095); it takes effect at the next boardLatchLed().
 void boardSetLed(uint16_t duty);
+void boardLatchLed(void);
 void boardGpampEnable(bool enable);
 void boardLedPwmEnable(bool enable);
 #endif

@@ -9,7 +9,9 @@ const led = PWM.addInstance();
 led.$name = "LED_PWM";
 led.clockSource = "BUSCLK";
 led.clockPrescale = 1;
-led.timerCount = 4096;
+// One PWM period per ADC frame (62.5 us at 32 MHz), so LED edges keep a fixed
+// phase to the conversions. board.c aligns the phase and checks this value.
+led.timerCount = 2000;
 led.pwmMode = "EDGE_ALIGN";
 led.ccIndex = [1];
 led.PWM_CHANNEL_1.$name = "LED_GREEN";

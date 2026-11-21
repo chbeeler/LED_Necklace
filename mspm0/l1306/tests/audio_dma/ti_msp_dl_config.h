@@ -22,7 +22,8 @@ static inline void __SEV(void){}
 #define DL_DMA_clearInterruptStatus(...) ((unsigned)0)
 #define DL_DMA_enableChannel(...) ((unsigned)0)
 #define DL_DMA_enableInterrupt(...) ((unsigned)0)
-#define DL_DMA_getPendingInterrupt(...) ((unsigned)0)
+static unsigned testDmaPending;
+#define DL_DMA_getPendingInterrupt(...) (testDmaPending)
 #define DL_DMA_setDestAddr(...) ((unsigned)0)
 #define DL_DMA_setSrcAddr(...) ((unsigned)0)
 #define DL_DMA_setTransferSize(...) ((unsigned)0)
