@@ -68,7 +68,7 @@ flashing a prebuilt image does not require CCS or UniFlash.
 ## Migration and history
 
 Work-email author AND committer identities were corrected in both original repos.
-Existing personal Gmail authorship was retained. Repository-local user identity
+Personal Gmail author and committer identities were also changed to noreply. Repository-local user identity
 is now the personal GitHub noreply identity. Rewriting authors changes commit IDs,
 but each original commit's file tree was checked to remain identical.
 
