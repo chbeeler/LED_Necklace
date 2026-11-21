@@ -27,7 +27,7 @@ buttons.associatedPins[0].assignedPin = "14";
 buttons.associatedPins[0].direction = "INPUT";
 buttons.associatedPins[0].internalResistor = "PULL_UP";
 
-// Each event starts OPA/raw/GPAMP/GPAMP. The fourth conversion pads FIFO packing.
+// Each event starts four conversions: OPA, raw, then two more (see ADC12 below).
 const TIMER = scripting.addModule("/ti/driverlib/TIMER", {}, false);
 const sampleTimer = TIMER.addInstance();
 sampleTimer.$name = "AUDIO_TIMER";
@@ -67,8 +67,11 @@ adc.adcMem0trig = "DL_ADC12_TRIGGER_MODE_AUTO_NEXT";
 adc.adcMem1trig = "DL_ADC12_TRIGGER_MODE_AUTO_NEXT";
 adc.adcMem2trig = "DL_ADC12_TRIGGER_MODE_AUTO_NEXT";
 adc.adcMem3trig = "DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT";
-adc.adcMem2chansel = "DL_ADC12_INPUT_CHAN_14";
-adc.adcMem3chansel = "DL_ADC12_INPUT_CHAN_14";
+// OPA oversampling experiment: slots 2 and 3 convert the OPA (channel 12)
+// again instead of the GPAMP (channel 14). The firmware still labels these
+// two slots "gpamp" in the N2 lines and the G/H/A captures.
+adc.adcMem2chansel = "DL_ADC12_INPUT_CHAN_12";
+adc.adcMem3chansel = "DL_ADC12_INPUT_CHAN_12";
 adc.adcMem2vref = "VREF";
 adc.adcMem3vref = "VREF";
 adc.adcMem2vrefDependencySelect = "DL_ADC12_REFERENCE_VOLTAGE_INTREF";
