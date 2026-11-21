@@ -3,18 +3,18 @@
 
 For every URL number and every one of the 8 QR mask patterns the script counts
 how many modules of a "-" (left) and "+" (right) symbol are already black and
-how many modules directly around the symbols are already white. Candidates are
-ranked by the number of modules that would have to be changed.
+how many modules directly around the symbols are already white. Every code
+that needs fewer changes than the limit of its symbol size (--below) is kept.
 
-The best candidates are written to <out>/svg (28 mm, no quiet zone) and
+These codes are written to <out>/svg (28 mm, no quiet zone) and
 <out>/png (with quiet zone, for on-screen scanning) in three variants:
 
-File names are qr_<changes>_<id>_mask<mask>_s<size>_<variant>, where <id> is the
+File names are qr_<changes>_<id>_mask<mask>_s<size>_<n>_<variant>, where <id> is the
 URL path with "/" written as "-" (n-123 for /n/123, 123 for /123):
 
-  *_raw     the unmodified QR code
-  *_filled  symbol modules black, surround white
-  *_gold    like filled, but the symbol modules are gold
+  *_1_raw     the unmodified QR code
+  *_2_filled  symbol modules black, surround white
+  *_3_gold    like filled, but the symbol modules are gold
 
 Example:
   python find_symbol_qr.py                                  # numbers 000 to 999
@@ -22,8 +22,6 @@ Example:
   python find_symbol_qr.py --start 0 --end 9999 --digits 4  # 0000 to 9999
 """
 import argparse
-import heapq
-import itertools
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -91,58 +89,50 @@ def positions(size_mm, x_mm, y_mm, search):
 _cfg = {}
 
 
-def _init(targets, white_weight):
-    _cfg.update(targets=targets, white_weight=white_weight)
+def _init(targets, limits):
+    _cfg.update(targets=targets, limits=limits)
 
 
 def _score(url):
-    """Best result per symbol size for one URL.
+    """All hits for one URL: [(changes, -black, size, url, mask, dx, dy)].
 
-    Returns [(cost, -black, size, url, mask, dx, dy)], lower is better.
-    cost = missing black modules + white_weight * surround modules that are black.
+    changes = missing symbol modules + surround modules that are black.
+    For every size and mask the best position is taken, and it is a hit when
+    its changes are below the limit of that size.
     """
-    best = {}
-    ww = _cfg["white_weight"]
     try:
         mats = qr_matrices(url)
     except DataOverflowError:
         return []
+    hits = []
     for mask, a in mats.items():
+        best = {}
         for size, dx, dy, sym, sur in _cfg["targets"]:
             black = int((a & sym).sum())
-            cost = (int(sym.sum()) - black) + ww * int((a & sur).sum())
-            key = (cost, -black)
+            changes = (int(sym.sum()) - black) + int((a & sur).sum())
+            key = (changes, -black)
             if size not in best or key < best[size][:2]:
-                best[size] = (cost, -black, size, url, mask, dx, dy)
-    return list(best.values())
+                best[size] = (changes, -black, size, url, mask, dx, dy)
+        hits += [b for size, b in best.items() if b[0] < _cfg["limits"][size]]
+    return hits
 
 
-def search(urls, targets, top, jobs, white_weight):
-    """Return {size: [(url, mask, dx, dy), ...]} best first.
-
-    Only the best mask/position of each URL is kept, so the top list always
-    contains different URLs.
-    """
-    heaps = {}
-    args = (targets, white_weight)
+def search(urls, targets, limits, jobs):
+    """Return {size: [(url, mask, dx, dy), ...]} of all hits, fewest changes first."""
+    args = (targets, limits)
     if jobs > 1:
         pool = Pool(jobs, initializer=_init, initargs=args)
         results = pool.imap_unordered(_score, urls, chunksize=16)
     else:
         _init(*args)
         pool, results = None, map(_score, urls)
-    counter = itertools.count()
+    found = {}
     for res in results:
-        for cost, nblack, size, *rest in res:
-            h = heaps.setdefault(size, [])
-            item = (-cost, -nblack, next(counter), *rest)  # max-heap on "worst kept"
-            if len(h) < top:
-                heapq.heappush(h, item)
-            elif item[:2] > h[0][:2]:
-                heapq.heapreplace(h, item)
+        for hit in res:
+            found.setdefault(hit[2], []).append(hit)
     if pool:
         pool.close()
-    return {s: [t[3:] for t in sorted(h, key=lambda t: (-t[0], -t[1], t[3]))] for s, h in heaps.items()}
+    return {size: [h[3:] for h in sorted(hits)] for size, hits in found.items()}
 
 
 # ----------------------------------------------------------------- rendering
@@ -237,24 +227,27 @@ def main():
     p.add_argument("--start", type=int, default=0, help="first number to try (default 0)")
     p.add_argument("--end", type=int, default=999, help="last number to try, inclusive (default 999)")
     p.add_argument("--digits", type=int, default=3, help="pad numbers with leading zeros to this many digits (default 3)")
-    p.add_argument("--sizes", type=int, nargs="+", default=[7, 5], help="symbol sizes in modules (odd numbers)")
+    p.add_argument("--below", nargs="+", default=["7:23", "5:12"], metavar="SIZE:CHANGES",
+                   help="symbol sizes in modules (odd) and their limit: every code that needs fewer "
+                        "changes than this is written (default: 7:23 5:12)")
     p.add_argument("--size-mm", type=float, default=28.0, help="QR size without quiet zone")
     p.add_argument("--x-mm", type=float, default=12.0, help="symbol centre offset left/right of centre")
     p.add_argument("--y-mm", type=float, default=3.0, help="symbol centre offset below centre")
     p.add_argument("--search", type=int, default=1, help="try +/- this many modules around the nominal position")
-    p.add_argument("--white-weight", type=float, default=1.0,
-                   help="weight of a wrong surround module relative to a missing symbol module (0 = ignore surround)")
-    p.add_argument("--top", type=int, default=5, help="number of results to output per size")
     p.add_argument("--jobs", type=int, default=1, help="worker processes")
     p.add_argument("-o", "--out", default="qr_out", help="output directory")
     args = p.parse_args()
+    try:
+        limits = {int(size): int(limit) for size, limit in (item.split(":") for item in args.below)}
+    except ValueError:
+        p.error("--below expects SIZE:CHANGES pairs, e.g. 7:23 5:12")
 
     mod = args.size_mm / N
     cand, (dx0, dy0) = positions(args.size_mm, args.x_mm, args.y_mm, args.search)
     print(f"Module size {mod:.3f} mm. Nominal position: {dx0} modules ({dx0 * mod:.2f} mm) sideways, "
           f"{dy0} modules ({dy0 * mod:.2f} mm) below centre.")
     targets = []
-    for size in args.sizes:
+    for size in limits:
         usable = [(dx, dy) for dx, dy in cand if symbol_masks(dx, dy, size) is not None]
         print(f"Size {size}: positions searched (dx, dy) = {usable}")
         skipped = sorted({dx for dx, _ in cand} - {dx for dx, _ in usable})
@@ -272,13 +265,13 @@ def main():
         templates += [t.partition("://")[2] for t in args.url if "://" in t]
     urls = list(dict.fromkeys(t.format(n=n) for t in templates for n in numbers))
     print(f"Searching {len(numbers)} numbers ({numbers[0]} to {numbers[-1]}) x {len(templates)} URL forms x 8 masks ...")
-    best = search(urls, targets, args.top, args.jobs, args.white_weight)
+    best = search(urls, targets, limits, args.jobs)
 
     out = Path(args.out)
     for sub in ("svg", "png"):
         (out / sub).mkdir(parents=True, exist_ok=True)
-    for size in args.sizes:
-        print(f"\nSize {size}x{size}")
+    for size, limit in limits.items():
+        print(f"\nSize {size}x{size}: {len(best.get(size, []))} codes with fewer than {limit} changes")
         print("  mask dx dy  black  white  changes  decodes raw/filled/gold  url")
         for url, mask, dx, dy in best.get(size, []):
             matrix = qr_matrices(url)[mask]
@@ -286,15 +279,16 @@ def main():
             n_sym, n_sur = int(sym.sum()), int(sur.sum())
             black, white = int((matrix & sym).sum()), int((~matrix & sur).sum())
             changes = n_sym - black + n_sur - white
-            # File name: qr_<changes>_<id>_mask<mask>_s<size>_<variant>. The id is
+            # File name: qr_<changes>_<id>_mask<mask>_s<size>_<n>_<variant>. The id is
             # the URL path with "/" written as "-", e.g. "n-123" for /n/123.
             # URLs without https:// get "-noscheme" appended.
             scheme, sep, rest = url.rpartition("://")
             ident = rest.partition("/")[2].replace("/", "-") + ("" if sep else "-noscheme")
             ok = []
-            for variant in ("raw", "filled", "gold"):
+            # The variants are numbered so that raw sorts before filled and gold.
+            for i, variant in enumerate(("raw", "filled", "gold"), 1):
                 blk, gld = variant_layers(matrix, sym, sur, variant)
-                stem = f"qr_{changes:02d}_{ident}_mask{mask}_s{size}_{variant}"
+                stem = f"qr_{changes:02d}_{ident}_mask{mask}_s{size}_{i}_{variant}"
                 write_svg(out / "svg" / f"{stem}.svg", blk, gld, args.size_mm)
                 img = make_png(blk, gld)
                 img.save(out / "png" / f"{stem}.png")
