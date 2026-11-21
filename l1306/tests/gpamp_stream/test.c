@@ -8,6 +8,11 @@ bool DL_UART_Main_isRXFIFOEmpty(int u){(void)u;return rx<0;}
 uint8_t DL_UART_Main_receiveData(int u){(void)u;int c=rx;rx=-1;return c;}
 bool DL_UART_Main_isTXFIFOFull(int u){(void)u;return false;}
 void DL_UART_Main_transmitData(int u,char c){(void)u;output[used++]=c;output[used]=0;}
+bool DL_UART_Main_isBusy(int u){(void)u;return false;}
+void audioCaptureStart(AudioCaptureMode mode){(void)mode;}
+void audioCaptureCancel(void){}
+const uint16_t *audioCaptureResult(void){return NULL;}
+void boardLedPwmEnable(bool enable){(void)enable;}
 static bool enabled;
 void boardGpampEnable(bool e){enabled=e;}
 void menuDebugPoll(void); void menuDebugMeasure(const AudioWindow*);

@@ -11,6 +11,48 @@ static unsigned head, tail;
 volatile uint32_t menuDebugDroppedLines;
 
 static bool measuring;
+static const char captureCommands[] = "ORGHA";
+static char captureCommand;
+static AudioCaptureMode captureMode;
+static unsigned quietWindows;
+static bool captureStarted;
+static const uint16_t *captureSamples;
+static unsigned captureTxOffset;
+
+static void cancelCapture(void)
+{
+    // Once a reply starts, finish the frame even if M or X arrives.
+    if (captureSamples) return;
+    audioCaptureCancel();
+    captureCommand = 0;
+    captureStarted = false;
+}
+
+static void transmitCapture(void)
+{
+    static const char header[] = "D,?,512\r\n";
+    static const char hex[] = "0123456789ABCDEF";
+    const unsigned headerLength = sizeof(header) - 1;
+    const unsigned payloadEnd = headerLength + 3 * AUDIO_CAPTURE_SAMPLES;
+
+    while (!DL_UART_Main_isTXFIFOFull(DEBUG_UART_INST)) {
+        char byte;
+        if (captureTxOffset < headerLength) {
+            byte = captureTxOffset == 2 ? captureCommand : header[captureTxOffset];
+        } else if (captureTxOffset < payloadEnd) {
+            const unsigned digit = captureTxOffset - headerLength;
+            byte = hex[(captureSamples[digit / 3] >> (4 * (2 - digit % 3))) & 15];
+        } else {
+            byte = captureTxOffset == payloadEnd ? '\r' : '\n';
+        }
+        DL_UART_Main_transmitData(DEBUG_UART_INST, byte);
+        if (++captureTxOffset == payloadEnd + 2) {
+            captureSamples = 0;
+            cancelCapture();
+            return;
+        }
+    }
+}
 static unsigned windows;
 static unsigned settlingWindows;
 static uint32_t sequence;
@@ -40,6 +82,7 @@ static void sendLine(const char *line, unsigned count)
 
 void reportAeqMenu(const char *label, uint16_t value)
 {
+    if (captureCommand) return;
     char line[16], digits[5];
     unsigned count = 0, n = 0;
     while (*label && count < 7) line[count++] = *label++;
@@ -56,13 +99,38 @@ void menuDebugPoll(void)
 {
     while (!DL_UART_Main_isRXFIFOEmpty(DEBUG_UART_INST)) {
         const uint8_t command=DL_UART_Main_receiveData(DEBUG_UART_INST);
-        if (command=='M') { boardGpampEnable(true); settlingWindows=64; measuring=true; sequence=0; resetWindow(); }
-        if (command=='X') { measuring=false; boardGpampEnable(false); resetWindow(); }
+        if (command == 'M' || command == 'X') {
+            cancelCapture();
+            measuring = command == 'M';
+            boardGpampEnable(measuring);
+            if (measuring) {
+                settlingWindows = 64;
+                sequence = 0;
+            }
+            resetWindow();
+        } else if (command == 'L' || command == 'l') {
+            boardLedPwmEnable(command == 'l');
+        } else if (measuring && !captureCommand) {
+            for (unsigned i = 0; i < sizeof(captureCommands) - 1; ++i) {
+                if (command != captureCommands[i]) continue;
+                captureCommand = command;
+                captureMode = (AudioCaptureMode)i;
+                // The first window boundary may be immediately after TX idles.
+                quietWindows = 3;
+                resetWindow();
+                break;
+            }
+        }
     }
     while (tail != head && !DL_UART_Main_isTXFIFOFull(DEBUG_UART_INST)) {
         DL_UART_Main_transmitData(DEBUG_UART_INST, queue[tail]);
         tail = (tail + 1) & 255;
     }
+    if (captureStarted && !captureSamples) {
+        captureSamples = audioCaptureResult();
+        captureTxOffset = 0;
+    }
+    if (captureSamples) transmitCapture();
 }
 
 // Integer-only CSV formatting avoids printf and large floating-point libraries.
@@ -81,6 +149,14 @@ void menuDebugMeasure(const AudioWindow *w)
 {
     if (!measuring) return;
     if (settlingWindows) { --settlingWindows; return; }
+    if (captureCommand) {
+        if (!captureStarted && tail == head &&
+            !DL_UART_Main_isBusy(DEBUG_UART_INST) && --quietWindows == 0) {
+            audioCaptureStart(captureMode);
+            captureStarted = true;
+        }
+        return;
+    }
     gpampPower+=w->gpamp.rms*w->gpamp.rms;
     gpampMean+=w->gpamp.mean;
     if (w->gpamp.rms>gpampPeak) gpampPeak=w->gpamp.rms;

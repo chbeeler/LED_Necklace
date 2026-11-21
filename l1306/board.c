@@ -5,7 +5,13 @@ void boardInit(void)
 {
     SYSCFG_DL_init();
     boardSetLed(0);
-    DL_TimerG_startCounter(LED_PWM_INST);
+    boardLedPwmEnable(true);
+}
+
+void boardLedPwmEnable(bool enable)
+{
+    if (enable) DL_TimerG_startCounter(LED_PWM_INST);
+    else DL_TimerG_stopCounter(LED_PWM_INST);
 }
 
 bool boardPlusPressed(void)

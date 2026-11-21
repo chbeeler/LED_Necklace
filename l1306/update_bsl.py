@@ -11,6 +11,8 @@ import struct
 import time
 import serial
 
+TRACE = False
+
 
 def crc(data):
     return binascii.crc32(data) ^ 0xffffffff
@@ -18,6 +20,8 @@ def crc(data):
 
 def read(port, count):
     data = port.read(count)
+    if TRACE and data:
+        print(f"RX ({len(data)}/{count} bytes): {data.hex(' ')}", flush=True)
     if len(data) != count:
         raise TimeoutError("Incomplete BSL reply. Check wiring; hold S1, tap RESET, release S1.")
     return data
@@ -101,19 +105,37 @@ def wait_for_bootloader(port, seconds):
     print("Listening: hold S1, tap and release RESET, then release S1.", flush=True)
     deadline = time.monotonic() + seconds
     previous_timeout = port.timeout
+    last_notice = time.monotonic()
+    last_error = None
+    stage = "connection"
     port.timeout = 0.3
     try:
         while time.monotonic() < deadline:
             port.reset_input_buffer()
             try:
+                stage = "connection"
                 command(port, b"\x12", False)
+                stage = "identity"
+                print("Connection ACK received; checking identity...", flush=True)
                 # A stray zero during reset is not proof of a BSL connection.
                 # Require a complete CRC-checked identity before any unlock/write.
                 port.timeout = previous_timeout
                 return identify(port, connected=True)
             except serial.SerialException:
                 raise
-            except (TimeoutError, IOError):
+            except (TimeoutError, IOError) as error:
+                now = time.monotonic()
+                detail = f"{stage}: {error}"
+                # Routine silence is summarized every five seconds. Unexpected
+                # data or a failed identity is reported immediately, then capped.
+                unexpected = stage == "identity" or not isinstance(error, TimeoutError)
+                if (unexpected and detail != last_error) or now-last_notice >= 5:
+                    if unexpected:
+                        print(f"Handshake failed ({detail}). No flash erased; retry S1 + RESET.", flush=True)
+                    else:
+                        print("Still waiting: no UART reply. Retry S1 + RESET while this runs.", flush=True)
+                    last_notice = now
+                    last_error = detail
                 port.timeout = 0.3
                 continue
         raise TimeoutError("No BSL connection received; no flash erased")
@@ -122,18 +144,22 @@ def wait_for_bootloader(port, seconds):
 
 
 def main():
+    global TRACE
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("port", help="XDS110 Application/User UART, e.g. COM45")
     parser.add_argument("--probe", action="store_true", help="identify only; no unlock or writes")
     parser.add_argument("--image", type=Path, default=Path(__file__).parent / "Debug/AEQ_L1306.bin")
     parser.add_argument("--wait", type=float, default=120,
                         help="seconds to wait for S1/reset (default 120)")
+    parser.add_argument("--trace", action="store_true", help="show received bytes during discovery only")
     args = parser.parse_args()
+    TRACE = args.trace
     if not 0 < args.wait <= 300:
         parser.error("--wait must be greater than zero and at most 300")
     data = None if args.probe else application(args.image)
     with serial.Serial(args.port, 9600, timeout=3, write_timeout=3) as port:
         wait_for_bootloader(port, args.wait)
+        TRACE = False
         if not args.probe:
             update(port, data, connected=True, identified=True)
 

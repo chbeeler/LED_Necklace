@@ -7,4 +7,5 @@ bool boardPlusPressed(void);
 bool boardMinusPressed(void);
 void boardSetLed(uint16_t duty);
 void boardGpampEnable(bool enable);
+void boardLedPwmEnable(bool enable);
 #endif

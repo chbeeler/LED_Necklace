@@ -26,6 +26,45 @@ static Accumulator raw = {.minimum = ADC_MAX};
 static Accumulator gpamp = {.minimum = ADC_MAX};
 static uint16_t accumulatedPairs;
 static uint32_t lastBlock;
+static uint16_t capture[AUDIO_CAPTURE_SAMPLES];
+static unsigned captureCount;
+static bool captureActive;
+static AudioCaptureMode captureMode;
+
+void audioCaptureStart(AudioCaptureMode mode)
+{
+    captureMode = mode;
+    captureCount = 0;
+    captureActive = true;
+}
+
+void audioCaptureCancel(void)
+{
+    captureCount = 0;
+    captureActive = false;
+}
+
+const uint16_t *audioCaptureResult(void)
+{
+    return captureCount == AUDIO_CAPTURE_SAMPLES ? capture : 0;
+}
+
+static void captureBlock(void)
+{
+    for (unsigned i = 0; i < BLOCK_WORDS; i += 2) {
+        if (captureMode == AUDIO_CAPTURE_ALL) {
+            capture[captureCount++] = snapshot[i] & ADC_MAX;
+            capture[captureCount++] = (snapshot[i] >> 16) & ADC_MAX;
+            capture[captureCount++] = snapshot[i + 1] & ADC_MAX;
+            capture[captureCount++] = (snapshot[i + 1] >> 16) & ADC_MAX;
+        } else {
+            const unsigned word = i + (captureMode >= AUDIO_CAPTURE_GPAMP);
+            const unsigned shift = (captureMode & 1) * 16;
+            capture[captureCount++] = (snapshot[word] >> shift) & ADC_MAX;
+        }
+    }
+    if (captureCount == AUDIO_CAPTURE_SAMPLES) captureActive = false;
+}
 
 volatile uint32_t micDmaBlocks;
 volatile uint32_t micMissedBlocks;
@@ -98,8 +137,10 @@ bool audioPollWindow(AudioWindow *window)
         raw = (Accumulator){.minimum = ADC_MAX};
         gpamp = (Accumulator){.minimum = ADC_MAX};
         accumulatedPairs = 0;
+        if (captureActive) captureCount = 0;
     }
     lastBlock = sequence;
+    if (captureActive) captureBlock();
     for (unsigned i = 0; i < BLOCK_WORDS; i += 2) {
         accumulate(&opa, (uint16_t)(snapshot[i] & ADC_MAX));
         accumulate(&raw, (uint16_t)((snapshot[i] >> 16) & ADC_MAX));

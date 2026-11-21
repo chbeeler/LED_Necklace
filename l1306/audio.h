@@ -15,6 +15,17 @@ typedef struct {
     AudioLevel gpamp;
     uint32_t timeMs;
 } AudioWindow;
+enum { AUDIO_CAPTURE_SAMPLES = 512 };
+typedef enum {
+    AUDIO_CAPTURE_OPA,
+    AUDIO_CAPTURE_RAW,
+    AUDIO_CAPTURE_GPAMP,
+    AUDIO_CAPTURE_GPAMP_REPEAT,
+    AUDIO_CAPTURE_ALL,
+} AudioCaptureMode;
+void audioCaptureStart(AudioCaptureMode mode);
+void audioCaptureCancel(void);
+const uint16_t *audioCaptureResult(void);
 void audioStart(void);
 bool audioPollWindow(AudioWindow *window);
 #endif
