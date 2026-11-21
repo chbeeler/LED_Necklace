@@ -1,0 +1,10 @@
+/Debug/
+/Light/
+/bootloader/__pycache__/
+/Release/
+/.clangd
+/l1306/Debug/
+/l1306/.settings/
+/l1306/__pycache__/
+/captures/
+/l1306/tests/__pycache__/

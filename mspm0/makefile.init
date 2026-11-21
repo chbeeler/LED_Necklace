@@ -1,0 +1,7 @@
+.DEFAULT_GOAL := all
+# CCS includes this after defining the generated linker flags.
+GEN_CMDS__FLAG := -Wl,-l"../aeq-app.layout"
+ifeq ($(notdir $(CURDIR)),Light)
+GEN_CMDS__FLAG := -Wl,--define=AEQ_LIGHT=1 $(GEN_CMDS__FLAG)
+endif
+AEQ.out: ../aeq-app.layout

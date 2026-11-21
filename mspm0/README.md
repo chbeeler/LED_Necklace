@@ -1,0 +1,68 @@
+## AEQ button power control
+
+Use normally open switches from PA24 (Plus, J1 pin 5) and PA23 (Minus, J2 pin 12) to ground. To try the off/wake cycle on a programmed board:
+
+1. Hold both buttons for 1 second until the LED goes out, then release both. The sampling timer and ADC are powered down. The MCU waits in STANDBY0 between button edges.
+2. Tap either button alone, then try a short two-button press. The LED should stay off.
+3. Hold both continuously for 1 second, then release both. After 100 ms of stable release, the MCU resets and AEQ starts with its normal defaults. Check the LED response with a clap.
+
+4. Separately, hold S2 while tapping RESET to enter the loader. Use the matching UART updater with the probe option to check it, then reset without S2 to resume AEQ.
+
+## AEQ settings menu
+
+In AEQ mode, hold Minus for 1 second to enter the menu. Short Plus/Minus presses adjust the selected setting; hold Minus again to advance, and hold Plus to exit. The selections are signaled as two pulses for sensitivity, three for beat afterglow, and four for idle brightness. The menu exits after 30 seconds without input. AEQ continues reacting to music while sensitivity or afterglow is selected; idle-brightness selection holds the LED at the configured idle level.
+
+The microphone breakout still draws power if wired directly to 3.3 V. For a current measurement, distinguish the target MCU supply from the microphone, onboard debugger and other LaunchPad loads.
+
+## Example Summary
+
+The following example configures ADC0 to be triggered by a TimerG instance 1s
+after the timer has been started. The TimerG event is published on channel 1.
+
+**Note**: Example requires Rev E3 or later of the MSPM0C1104 LaunchPad.
+
+## Peripherals & Pin Assignments
+
+| Peripheral | Pin | Function |
+| --- | --- | --- |
+| SYSCTL |  |  |
+| TIMG14 |  |  |
+| ADC0 | PA25 | ADC12 Channel 2 Pin |
+| EVENT |  |  |
+| DEBUGSS | PA20 | Debug Clock |
+| DEBUGSS | PA19 | Debug Data In Out |
+
+## BoosterPacks, Board Resources & Jumper Settings
+
+Visit [LP_MSPM0C1104](https://www.ti.com/tool/LP-MSPM0C1104) for LaunchPad information, including user guide and hardware files.
+
+| Pin | Peripheral | Function | LaunchPad Pin | LaunchPad Settings |
+| --- | --- | --- | --- | --- |
+| PA25 | ADC0 | A2 | J1_2 | N/A |
+| PA20 | DEBUGSS | SWCLK | J2_11 | <ul><li>PA20 is used by SWD during debugging<br><ul><li>`J101 13:14 ON` Connect to XDS-110 SWCLK while debugging<br><li>`J101 13:14 OFF` Disconnect from XDS-110 SWCLK if using pin in application</ul></ul> |
+| PA19 | DEBUGSS | SWDIO | J2_17 | <ul><li>PA19 is used by SWD during debugging<br><ul><li>`J101 11:12 ON` Connect to XDS-110 SWDIO while debugging<br><li>`J101 11:12 OFF` Disconnect from XDS-110 SWDIO if using pin in application</ul></ul> |
+
+### Device Migration Recommendations
+This project was developed for a superset device included in the LP_MSPM0C1104 LaunchPad. Please
+visit the [CCS User's Guide](https://software-dl.ti.com/msp430/esd/MSPM0-SDK/latest/docs/english/tools/ccs_ide_guide/doc_guide/doc_guide-srcs/ccs_ide_guide.html#sysconfig-project-migration)
+for information about migrating to other MSPM0 devices.
+
+### Low-Power Recommendations
+TI recommends to terminate unused pins by setting the corresponding functions to
+GPIO and configure the pins to output low or input with internal
+pullup/pulldown resistor.
+
+SysConfig allows developers to easily configure unused pins by selecting **Board**→**Configure Unused Pins**.
+
+For more information about jumper configuration to achieve low-power using the
+MSPM0 LaunchPad, please visit the [LP-MSPM0C1104 User's Guide](https://www.ti.com/lit/slau908).
+
+## Example Usage
+Provide a valid voltage to A0_2 (Voltage source for ADC is expected to be
+between 0V and MCU supply voltage). Compile, load, and run the example. The
+example will hit the breakpoint after the ADC conversion is done automatically.
+Once it hits the breakpoint, gADCResult array can be inspected.
+
+On powerup, the ADC pin(s) used in this example are by default set to
+the correct analog mode. Therefore, calls to
+DL_GPIO_initPeripheralAnalogFunction for pinmuxing those pins are not needed.
