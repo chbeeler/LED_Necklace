@@ -22,12 +22,12 @@
     <link>
       <name>adaptive_brightness.cpp</name>
       <type>1</type>
-      <locationURI>PARENT-3-PROJECT_LOC/LED_Necklace/src/adaptive_brightness.cpp</locationURI>
+      <locationURI>PARENT-2-PROJECT_LOC/src/adaptive_brightness.cpp</locationURI>
     </link>
     <link>
       <name>button_gestures.cpp</name>
       <type>1</type>
-      <locationURI>PARENT-3-PROJECT_LOC/LED_Necklace/src/button_gestures.cpp</locationURI>
+      <locationURI>PARENT-2-PROJECT_LOC/src/button_gestures.cpp</locationURI>
     </link>
   </linkedResources>
 </projectDescription>

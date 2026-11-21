@@ -39,8 +39,8 @@ counters. This circuit currently has no external microphone low-pass filter.
 ## Shared application
 
 The CCS links reuse aeq_led.cpp from the C1104 project and adaptive_brightness.cpp
-and button_gestures.cpp from the sibling LED_Necklace repository. Keep that
-repository at C:/Daten/LED_Necklace (or preserve the equivalent relative layout).
+and button_gestures.cpp from this repository's top-level src directory.
+Shared headers remain in the top-level include directory; no second clone is needed.
 No copies of the shared algorithm or button implementation are maintained here.
 
 OPA RMS is divided by micOpaGain (initially 16), then converted from the 2.5 V

@@ -29,7 +29,7 @@ def main():
     flags = ["-mcpu=cortex-m0plus", "-march=thumbv6m", "-mthumb",
              "-mfloat-abi=soft", "-O2", "-g", "-Wall", "@device.opt",
              "-I" + str(project), "-I" + str(build),
-             "-I" + str(project.parents[2] / "LED_Necklace/include"),
+             "-I" + str(project.parents[1] / "include"),
              "-I" + str(args.sdk / "source"),
              "-I" + str(args.sdk / "source/third_party/CMSIS/Core/Include")]
     objects = []
