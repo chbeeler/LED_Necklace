@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "board.h"
 #include "ti_msp_dl_config.h"
 #include <math.h>
 
@@ -7,6 +8,9 @@
 #endif
 
 enum { BLOCK_WORDS = 64, BLOCK_FRAMES = 32, ADC_MAX = 4095 };
+// Windows end on fixed DMA block numbers, so the interrupt can apply a new
+// LED duty exactly between two windows.
+enum { WINDOW_BLOCKS = AUDIO_WINDOW_PAIRS / BLOCK_FRAMES };
 typedef struct {
     uint32_t sum;
     uint32_t sumSquares;
@@ -147,17 +151,21 @@ bool audioPollWindow(AudioWindow *window)
         accumulate(&gpamp, (uint16_t)(snapshot[i+1] & ADC_MAX));
     }
     accumulatedPairs += BLOCK_FRAMES;
-    if (accumulatedPairs < AUDIO_WINDOW_PAIRS) return false;
-    window->opa = finish(&opa);
-    window->raw = finish(&raw);
-    window->gpamp = finish(&gpamp);
-    window->timeMs = sequence * (BLOCK_FRAMES * 1000 / AUDIO_SAMPLE_RATE);
+    if (sequence % WINDOW_BLOCKS) return false;
+    // A window that lost blocks is discarded instead of reported short.
+    const bool complete = accumulatedPairs == AUDIO_WINDOW_PAIRS;
+    if (complete) {
+        window->opa = finish(&opa);
+        window->raw = finish(&raw);
+        window->gpamp = finish(&gpamp);
+        window->timeMs = sequence * (BLOCK_FRAMES * 1000 / AUDIO_SAMPLE_RATE);
+        ++micWindows;
+    }
     opa = (Accumulator){.minimum = ADC_MAX};
     raw = (Accumulator){.minimum = ADC_MAX};
     gpamp = (Accumulator){.minimum = ADC_MAX};
     accumulatedPairs = 0;
-    ++micWindows;
-    return true;
+    return complete;
 }
 
 void DMA_IRQHandler(void)
@@ -169,6 +177,7 @@ void DMA_IRQHandler(void)
     if (blockReady) ++micMissedBlocks;
     readyBuffer = completed;
     ++micDmaBlocks;
+    if (micDmaBlocks % WINDOW_BLOCKS == 0) boardLatchLed();
     blockReady = true;
     __SEV();
 }

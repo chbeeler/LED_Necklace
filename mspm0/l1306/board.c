@@ -1,17 +1,49 @@
 #include "board.h"
 #include "ti_msp_dl_config.h"
 
+// LED edges that fall inside an ADC acquisition disturb that sample by up to
+// a few hundred counts. The PWM therefore runs at exactly one period per ADC
+// frame, so an edge hits the same point of every frame and its disturbance is
+// a constant offset instead of noise. Duty changes are applied only at audio
+// window boundaries (boardLatchLed), which keeps that offset constant within
+// each RMS window, where the mean is removed.
+enum {
+    LED_PWM_PERIOD = 2000,
+    // The LED turns on at each PWM reload. Reload this many timer ticks
+    // (17.5 us) before the ADC trigger: the four conversions of a frame take
+    // about 40 us, so the turn-on edge lands in the idle gap after them.
+    LED_RELOAD_LEAD = 560,
+};
+_Static_assert(AUDIO_TIMER_INST_LOAD_VALUE + 1 == LED_PWM_PERIOD,
+               "LED PWM period must equal the ADC frame period");
+
+static volatile uint32_t pendingCompare = LED_PWM_PERIOD;
+
 void boardInit(void)
 {
     SYSCFG_DL_init();
     boardSetLed(0);
-    boardLedPwmEnable(true);
+    boardLatchLed();
 }
 
+// Call with the audio timer running. Both timers count down on BUSCLK, so the
+// phase set here is kept until the LED counter is stopped.
 void boardLedPwmEnable(bool enable)
 {
-    if (enable) DL_TimerG_startCounter(LED_PWM_INST);
-    else DL_TimerG_stopCounter(LED_PWM_INST);
+    DL_TimerG_stopCounter(LED_PWM_INST);
+    if (!enable) return;
+    // The counter may only be written while stopped, and must then keep the
+    // written value when it is enabled.
+    DL_Timer_setCounterValueAfterEnable(LED_PWM_INST,
+                                        DL_TIMER_COUNT_AFTER_EN_NO_CHANGE);
+    const uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    // Counter values are the ticks left until the ADC trigger / PWM reload.
+    const uint32_t untilTrigger = DL_TimerG_getTimerCount(AUDIO_TIMER_INST);
+    DL_TimerG_setTimerCount(LED_PWM_INST,
+        (untilTrigger + LED_PWM_PERIOD - LED_RELOAD_LEAD) % LED_PWM_PERIOD);
+    DL_TimerG_startCounter(LED_PWM_INST);
+    __set_PRIMASK(mask);
 }
 
 bool boardPlusPressed(void)
@@ -28,9 +60,17 @@ bool boardMinusPressed(void)
 void boardSetLed(uint16_t duty)
 {
     if (duty > 4095) duty = 4095;
+    const uint32_t onTicks = ((uint32_t)duty * LED_PWM_PERIOD + 2047) / 4095;
     // SysConfig maps 0% to PERIOD and 100% to zero for this PWM mode.
-    const uint32_t compare = duty == 4095 ? 0 : 4096 - duty;
-    DL_TimerG_setCaptureCompareValue(LED_PWM_INST, compare, DL_TIMER_CC_1_INDEX);
+    pendingCompare = LED_PWM_PERIOD - onTicks;
+}
+
+// Called from the DMA interrupt when a block that ends an audio window has
+// completed, i.e. in the idle gap after that frame's conversions.
+void boardLatchLed(void)
+{
+    DL_TimerG_setCaptureCompareValue(LED_PWM_INST, pendingCompare,
+                                     DL_TIMER_CC_1_INDEX);
 }
 
 // Enabled only by the measurement command, never automatically at boot. This

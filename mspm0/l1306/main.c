@@ -37,6 +37,7 @@ int main(void)
     micNoiseFloor = 0.25f;
     micInputGain = 12.0f;
     audioStart();
+    boardLedPwmEnable(true);
     for (;;) {
         menuDebugPoll();
         AudioWindow window;
@@ -67,6 +68,7 @@ int main(void)
         if (!(display >= 0.0f)) display = 0.0f;
         if (display > 1.0f) display = 1.0f;
         ledDuty = (uint16_t)(display * 4095.0f + 0.5f);
+        // Applied at the end of the window now being sampled (16 ms later).
         boardSetLed(ledDuty);
     }
 }

@@ -1,7 +1,13 @@
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
+static unsigned ledLatches;
+void boardLatchLed(void){++ledLatches;}
 #include "audio.c"
+static bool pollNextBlock(AudioWindow *w){
+ blockReady=true;++micDmaBlocks;
+ return audioPollWindow(w);
+}
 int main(void){
  AudioWindow w={0};
  for(unsigned block=0;block<8;block++){
@@ -42,4 +48,26 @@ int main(void){
  }
  puts("PASS: all raw capture modes and restart after a DMA gap");
  puts("PASS: DMA decoding, channel order, padding discard, RMS and timestamp");
+
+ // Windows end on every eighth DMA block. One that lost a block is dropped.
+ while (micDmaBlocks % 8) pollNextBlock(&w);
+ uint32_t windows = micWindows;
+ ++micDmaBlocks; // Lose the first block of the next window.
+ for (unsigned block = 0; block < 7; ++block) assert(!pollNextBlock(&w));
+ assert(micDmaBlocks % 8 == 0 && micWindows == windows);
+ for (unsigned block = 0; block < 8; ++block)
+  assert(pollNextBlock(&w) == (block == 7));
+ assert(micWindows == windows + 1 && w.opa.rms == 1);
+ assert(w.timeMs == micDmaBlocks * 2);
+ puts("PASS: block-aligned windows and discard of a short window");
+
+ // The interrupt applies the pending LED duty only between two windows.
+ testDmaPending = DL_DMA_EVENT_IIDX_DMACH0;
+ ledLatches = 0;
+ for (unsigned block = 1; block <= 24; ++block) {
+  DMA_IRQHandler();
+  assert(ledLatches == block / 8);
+  assert(micDmaBlocks % 8 == block % 8);
+ }
+ puts("PASS: LED duty latched at window boundaries only");
 }
