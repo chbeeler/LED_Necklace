@@ -1,5 +1,9 @@
 # AEQ on LP-MSPM0L1306
 
+**Current build: GPAMP comparison. Follow [GPAMP_COMPARISON.md](GPAMP_COMPARISON.md)
+for the current wiring and BSL sequence. The original OPA-only wiring below is
+retained as historical reference and is not sufficient for this build.**
+
 Import this directory as the CCS project AEQ_L1306. The root AEQ project targets
 C1104. Build in CCS or run python build.py (Python 3.9+).
 The script accepts --sdk and --ccs installation paths.

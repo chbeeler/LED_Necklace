@@ -6,26 +6,28 @@ import math
 from pathlib import Path
 import time
 
-FIELDS = ('seq ms opa_mean opa_rms opa_peak opa_min opa_max '
+FIELDS_V1 = ('seq ms opa_mean opa_rms opa_peak opa_min opa_max '
           'raw_mean raw_rms raw_peak raw_min raw_max missed adc_overrun trigger_overrun tx_dropped').split()
-SCALED = {'opa_mean','opa_rms','opa_peak','raw_mean','raw_rms','raw_peak'}
+FIELDS = FIELDS_V1[:-4] + 'gpamp_mean gpamp_rms gpamp_peak gpamp_min gpamp_max'.split() + FIELDS_V1[-4:]
+SCALED = {f'{channel}_{field}' for channel in ('opa','raw','gpamp') for field in ('mean','rms','peak')}
 
 
 def parse(line):
     parts = line.strip().split(',')
-    if len(parts) != len(FIELDS)+1 or parts[0] != 'N1':
+    fields = {'N1': FIELDS_V1, 'N2': FIELDS}.get(parts[0])
+    if fields is None or len(parts) != len(fields)+1:
         return None
     values = [int(value) for value in parts[1:]]
     if any(value < 0 or value > 0xffffffff for value in values):
         raise ValueError('Invalid measurement value')
     return {key: value/1000 if key in SCALED else value
-            for key,value in zip(FIELDS,values)}
+            for key,value in zip(fields,values)}
 
 
 def load(path):
     with path.open(newline='') as f:
         reader=csv.DictReader(f)
-        if reader.fieldnames != FIELDS:
+        if reader.fieldnames not in (FIELDS_V1, FIELDS):
             raise ValueError('Not a noise capture CSV')
         rows=[{k:float(v) for k,v in row.items()} for row in reader]
     if not rows:
@@ -47,7 +49,9 @@ def health(rows):
 
 def summarize(rows, quiet=None):
     health(rows)
-    for channel in ('opa','raw'):
+    for channel in ('opa','raw','gpamp'):
+        if channel+'_rms' not in rows[0]:
+            continue
         total=rms(rows,channel)
         peak=max(r[channel+'_peak'] for r in rows)
         mean=sum(r[channel+'_mean'] for r in rows)/len(rows)
@@ -55,9 +59,9 @@ def summarize(rows, quiet=None):
         high=max(r[channel+'_max'] for r in rows)
         print(f'{channel.upper()}: RMS {total:.3f} counts, peak-window RMS {peak:.3f}, '
               f'DC {mean:.1f}, ADC range {low:.0f}..{high:.0f}')
-        if (channel=='opa' and (low<256 or high>3967)) or low<16 or high>4079:
+        if (channel in ('opa','gpamp') and (low<256 or high>3967)) or low<16 or high>4079:
             print('  WARNING: reached clipping/range-switch margins; avoid interpreting this as a clean gain/noise test.')
-        if quiet is not None:
+        if quiet is not None and channel+'_rms' in quiet[0]:
             noise=rms(quiet,channel)
             quiet_peak=max(r[channel+'_peak'] for r in quiet)
             signal=math.sqrt(max(0,total*total-noise*noise))
@@ -91,7 +95,7 @@ def main():
     output.parent.mkdir(parents=True,exist_ok=True)
     # Refuse overwriting a previous measurement before touching the board.
     with output.open('x',newline='') as f:
-        writer=csv.DictWriter(f,fieldnames=FIELDS);writer.writeheader()
+        writer=None
         import serial
         rows=[]
         with serial.Serial(args.port,115200,timeout=0.5,write_timeout=2) as port:
@@ -110,6 +114,10 @@ def main():
                     if row is None:
                         if line.strip(): print('Other UART output:',line.strip())
                         continue
+                    if writer is None:
+                        writer=csv.DictWriter(f,fieldnames=list(row));writer.writeheader()
+                    if list(row) != writer.fieldnames:
+                        raise RuntimeError('Measurement format changed during recording')
                     rows.append(row);writer.writerow(row);f.flush()
             finally:
                 port.write(b'X');port.flush()

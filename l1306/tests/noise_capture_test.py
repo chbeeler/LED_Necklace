@@ -19,3 +19,9 @@ assert "NOT ADC ENOB" in output.getvalue()
 with contextlib.redirect_stdout(io.StringIO()): c.summarize([quiet],[music])
 assert math.isfinite(c.rms([quiet,music],"opa"))
 print("PASS: CSV units, menu filtering, power subtraction and below-noise handling")
+
+line2=line.replace("N1,", "N2,").rsplit(",0,0,0,0",1)[0]+",1402000,5000,6000,1370,1430,0,0,0,0"
+row2=c.parse(line2)
+assert row2['gpamp_rms']==5 and row2['gpamp_peak']==6
+with contextlib.redirect_stdout(io.StringIO()): c.summarize([row2],[quiet])
+print('PASS: N2 GPAMP fields and mixed-version reference handling')
