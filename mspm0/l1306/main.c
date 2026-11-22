@@ -25,6 +25,9 @@ volatile float micRawRmsPeak;
 volatile float ledBrightness;
 volatile float ledBrightnessPeak;
 volatile uint16_t ledDuty;
+// Largest duty since the debug UART last reported it ('?').
+volatile uint16_t ledDutyPeak;
+volatile AudioLevel micAmp;
 // Make the onboard LED visible while preserving the shared necklace settings.
 volatile float ledDisplayGain = 16.0f;
 
@@ -49,6 +52,7 @@ int main(void)
         micOpa = window.opa;
         micRaw = window.raw;
         micGpamp = window.gpamp;
+        micAmp = window.amp;
         if (window.opa.rms > micOpaRmsPeak) micOpaRmsPeak = window.opa.rms;
         if (window.raw.rms > micRawRmsPeak) micRawRmsPeak = window.raw.rms;
         const bool wasRaw = range.useRaw;
@@ -68,6 +72,7 @@ int main(void)
         if (!(display >= 0.0f)) display = 0.0f;
         if (display > 1.0f) display = 1.0f;
         ledDuty = (uint16_t)(display * 4095.0f + 0.5f);
+        if (ledDuty > ledDutyPeak) ledDutyPeak = ledDuty;
         // Applied at the end of the window now being sampled (16 ms later).
         boardSetLed(ledDuty);
     }

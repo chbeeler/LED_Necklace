@@ -13,10 +13,11 @@ enum { BLOCK_WORDS = 64, BLOCK_FRAMES = 32, ADC_MAX = 4095 };
 enum { WINDOW_BLOCKS = AUDIO_WINDOW_PAIRS / BLOCK_FRAMES };
 typedef struct {
     uint32_t sum;
-    uint32_t sumSquares;
+    uint64_t sumSquares; // 256 sums of three conversions exceed 32 bits.
     uint16_t minimum;
     uint16_t maximum;
 } Accumulator;
+enum { AMP_MAX = 3 * ADC_MAX };
 
 // Two FIFO words per frame: OPA/raw, then GPAMP/discarded GPAMP repeat.
 // The ISR rearms the alternate buffer before processing the completed block.
@@ -28,8 +29,26 @@ static volatile bool blockReady;
 static Accumulator opa = {.minimum = ADC_MAX};
 static Accumulator raw = {.minimum = ADC_MAX};
 static Accumulator gpamp = {.minimum = ADC_MAX};
+static Accumulator amp = {.minimum = AMP_MAX};
+static bool ampAverage = true;
 static uint16_t accumulatedPairs;
 static uint32_t lastBlock;
+
+static void resetAccumulators(void)
+{
+    opa = (Accumulator){.minimum = ADC_MAX};
+    raw = (Accumulator){.minimum = ADC_MAX};
+    gpamp = (Accumulator){.minimum = ADC_MAX};
+    amp = (Accumulator){.minimum = AMP_MAX};
+    accumulatedPairs = 0;
+}
+
+void audioSetAveraging(bool averageThree)
+{
+    ampAverage = averageThree;
+    // The window in progress is now short and will be discarded.
+    resetAccumulators();
+}
 static uint16_t capture[AUDIO_CAPTURE_SAMPLES];
 static unsigned captureCount;
 static bool captureActive;
@@ -107,16 +126,18 @@ static void accumulate(Accumulator *acc, uint16_t value)
     if (value > acc->maximum) acc->maximum = value;
 }
 
-static AudioLevel finish(const Accumulator *acc)
+// Each accumulated value was the sum of `conversions` ADC results; the level
+// is reported in ADC counts.
+static AudioLevel finish(const Accumulator *acc, unsigned conversions)
 {
-    // 256 * 4095^2 fits in uint32_t; the variance numerator needs 64 bits.
-    const uint64_t numerator = (uint64_t)acc->sumSquares * AUDIO_WINDOW_PAIRS
+    const uint64_t numerator = acc->sumSquares * AUDIO_WINDOW_PAIRS
                              - (uint64_t)acc->sum * acc->sum;
+    const float scale = (float)(AUDIO_WINDOW_PAIRS * conversions);
     return (AudioLevel){
-        .mean = (float)acc->sum / AUDIO_WINDOW_PAIRS,
-        .rms = sqrtf((float)numerator) / AUDIO_WINDOW_PAIRS,
-        .minimum = acc->minimum,
-        .maximum = acc->maximum,
+        .mean = (float)acc->sum / scale,
+        .rms = sqrtf((float)numerator) / scale,
+        .minimum = (uint16_t)(acc->minimum / conversions),
+        .maximum = (uint16_t)(acc->maximum / conversions),
     };
 }
 
@@ -137,34 +158,33 @@ bool audioPollWindow(AudioWindow *window)
     __set_PRIMASK(mask);
 
     if (sequence != lastBlock + 1) {
-        opa = (Accumulator){.minimum = ADC_MAX};
-        raw = (Accumulator){.minimum = ADC_MAX};
-        gpamp = (Accumulator){.minimum = ADC_MAX};
-        accumulatedPairs = 0;
+        resetAccumulators();
         if (captureActive) captureCount = 0;
     }
     lastBlock = sequence;
     if (captureActive) captureBlock();
     for (unsigned i = 0; i < BLOCK_WORDS; i += 2) {
-        accumulate(&opa, (uint16_t)(snapshot[i] & ADC_MAX));
+        const uint16_t slot0 = snapshot[i] & ADC_MAX;
+        const uint16_t slot2 = snapshot[i + 1] & ADC_MAX;
+        const uint16_t slot3 = (snapshot[i + 1] >> 16) & ADC_MAX;
+        accumulate(&opa, slot0);
         accumulate(&raw, (uint16_t)((snapshot[i] >> 16) & ADC_MAX));
-        accumulate(&gpamp, (uint16_t)(snapshot[i+1] & ADC_MAX));
+        accumulate(&gpamp, slot2);
+        accumulate(&amp, ampAverage ? slot0 + slot2 + slot3 : slot0);
     }
     accumulatedPairs += BLOCK_FRAMES;
     if (sequence % WINDOW_BLOCKS) return false;
     // A window that lost blocks is discarded instead of reported short.
     const bool complete = accumulatedPairs == AUDIO_WINDOW_PAIRS;
     if (complete) {
-        window->opa = finish(&opa);
-        window->raw = finish(&raw);
-        window->gpamp = finish(&gpamp);
+        window->opa = finish(&opa, 1);
+        window->raw = finish(&raw, 1);
+        window->gpamp = finish(&gpamp, 1);
+        window->amp = finish(&amp, ampAverage ? 3 : 1);
         window->timeMs = sequence * (BLOCK_FRAMES * 1000 / AUDIO_SAMPLE_RATE);
         ++micWindows;
     }
-    opa = (Accumulator){.minimum = ADC_MAX};
-    raw = (Accumulator){.minimum = ADC_MAX};
-    gpamp = (Accumulator){.minimum = ADC_MAX};
-    accumulatedPairs = 0;
+    resetAccumulators();
     return complete;
 }
 

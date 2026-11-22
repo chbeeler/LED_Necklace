@@ -9,5 +9,6 @@ bool boardMinusPressed(void);
 void boardSetLed(uint16_t duty);
 void boardLatchLed(void);
 void boardGpampEnable(bool enable);
+void boardSelectAmplifier(bool gpamp);
 void boardLedPwmEnable(bool enable);
 #endif

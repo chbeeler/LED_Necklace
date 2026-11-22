@@ -28,8 +28,11 @@ void boardInit(void)
 
 // Call with the audio timer running. Both timers count down on BUSCLK, so the
 // phase set here is kept until the LED counter is stopped.
+static bool ledPwmEnabled;
+
 void boardLedPwmEnable(bool enable)
 {
+    ledPwmEnabled = enable;
     DL_TimerG_stopCounter(LED_PWM_INST);
     if (!enable) return;
     // The counter may only be written while stopped, and must then keep the
@@ -44,6 +47,37 @@ void boardLedPwmEnable(bool enable)
         (untilTrigger + LED_PWM_PERIOD - LED_RELOAD_LEAD) % LED_PWM_PERIOD);
     DL_TimerG_startCounter(LED_PWM_INST);
     __set_PRIMASK(mask);
+}
+
+// Points ADC slots 0, 2 and 3 at the OPA (channel 12) or the GPAMP (channel
+// 14); slot 1 stays on the unamplified microphone. Sampling pauses for about
+// 0.2 ms so the change happens between two frames and the FIFO word order the
+// DMA relies on is kept. The caller enables the GPAMP itself.
+void boardSelectAmplifier(bool gpamp)
+{
+    const uint32_t channel = gpamp ? DL_ADC12_INPUT_CHAN_14
+                                   : DL_ADC12_INPUT_CHAN_12;
+    static const DL_ADC12_MEM_IDX slots[] = {
+        DL_ADC12_MEM_IDX_0, DL_ADC12_MEM_IDX_2, DL_ADC12_MEM_IDX_3};
+    DL_TimerG_stopCounter(AUDIO_TIMER_INST);
+    delay_cycles(CPUCLK_FREQ / 5000); // Let the frame in progress finish.
+    DL_ADC12_disableConversions(AUDIO_ADC_INST);
+    for (unsigned i = 0; i < 3; ++i) {
+        // Same settings as SysConfig generates for these slots, except the
+        // channel: the last slot of a frame waits for the next timer event.
+        DL_ADC12_configConversionMem(AUDIO_ADC_INST, slots[i], channel,
+            DL_ADC12_REFERENCE_VOLTAGE_INTREF,
+            DL_ADC12_SAMPLE_TIMER_SOURCE_SCOMP0,
+            DL_ADC12_AVERAGING_MODE_DISABLED,
+            DL_ADC12_BURN_OUT_SOURCE_DISABLED,
+            slots[i] == DL_ADC12_MEM_IDX_3 ? DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT
+                                           : DL_ADC12_TRIGGER_MODE_AUTO_NEXT,
+            DL_ADC12_WINDOWS_COMP_MODE_DISABLED);
+    }
+    DL_ADC12_enableConversions(AUDIO_ADC_INST);
+    DL_TimerG_startCounter(AUDIO_TIMER_INST);
+    // The pause moved the frame timing; put the LED edges back in the gap.
+    if (ledPwmEnabled) boardLedPwmEnable(true);
 }
 
 bool boardPlusPressed(void)

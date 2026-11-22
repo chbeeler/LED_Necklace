@@ -70,4 +70,23 @@ int main(void){
   assert(micDmaBlocks % 8 == block % 8);
  }
  puts("PASS: LED duty latched at window boundaries only");
+
+ // The amplifier level is slot 0 alone, or the average of slots 0, 2 and 3.
+ readyBuffer = 0; // The interrupt test left the empty buffer selected.
+ audioSetAveraging(false);
+ for (unsigned block = 0; block < 8; ++block)
+  assert(pollNextBlock(&w) == (block == 7));
+ assert(w.amp.mean == 100 && w.amp.rms == 1);
+ assert(w.amp.minimum == 99 && w.amp.maximum == 101);
+ pollNextBlock(&w);
+ audioSetAveraging(true); // Mid-window: that window must be dropped.
+ for (unsigned block = 0; block < 7; ++block) assert(!pollNextBlock(&w));
+ for (unsigned block = 0; block < 8; ++block)
+  assert(pollNextBlock(&w) == (block == 7));
+ // Per frame: (100+s) + (300+3s) + 4000 with s = +/-1, divided by three.
+ assert(fabsf(w.amp.mean - 4400.0f / 3) < 1e-3f);
+ assert(fabsf(w.amp.rms - 4.0f / 3) < 1e-4f);
+ assert(w.amp.minimum == 4396 / 3 && w.amp.maximum == 4404 / 3);
+ assert(w.opa.mean == 100 && w.gpamp.mean == 300);
+ puts("PASS: single and three-conversion amplifier level");
 }

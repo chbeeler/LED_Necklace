@@ -13,8 +13,14 @@ typedef struct {
     AudioLevel opa;
     AudioLevel raw;
     AudioLevel gpamp;
+    // The amplified signal the LED algorithm uses: ADC slot 0 alone, or the
+    // average of slots 0, 2 and 3 (see audioSetAveraging). In ADC counts.
+    AudioLevel amp;
     uint32_t timeMs;
 } AudioWindow;
+// Slots 0, 2 and 3 must all convert the same amplifier while averaging is on.
+// Restarts the current window, so the next reported one is consistent.
+void audioSetAveraging(bool averageThree);
 enum { AUDIO_CAPTURE_SAMPLES = 512 };
 typedef enum {
     AUDIO_CAPTURE_OPA,

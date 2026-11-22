@@ -49,6 +49,17 @@ void adjustMenu(bool increase, bool fine)
 }
 }
 
+// For a board's debug interface: moves the AEQ sensitivity by the given number
+// of coarse button steps (0 only reads it) and returns the new value.
+extern "C" uint8_t aeqAdjustSensitivity(int steps)
+{
+    for (; steps > 0; --steps)
+        aeqSensitivity = ButtonSettings::stepAeqSensitivity(aeqSensitivity, true, false);
+    for (; steps < 0; ++steps)
+        aeqSensitivity = ButtonSettings::stepAeqSensitivity(aeqSensitivity, false, false);
+    return aeqSensitivity;
+}
+
 // Quiet-room cutoff in 12-bit ADC counts RMS; both settings are editable in CCS.
 volatile float micNoiseFloor = 1.2f;
 volatile float micInputGain = 12.0f;

@@ -200,3 +200,30 @@ Measurement build: 15864 bytes flash and 1748 bytes allocated RAM (including the
 256-byte stack reservation). Build and host simulations passed; streaming under
 real hardware load remains to be verified by the capture error counters.
 Host analysis regression: python l1306/tests/noise_capture_test.py
+
+## Debug UART commands (115200 baud)
+
+Single characters, no line ending. Settings reply with one `NAME: value` line.
+
+| Command | Effect |
+|---|---|
+| `M` / `X` | Start / stop the N2 measurement lines |
+| `O` `R` `G` `H` `A` | Raw capture of ADC slot 0, slot 1 (raw microphone), slot 2, slot 3, or all four interleaved (only while measuring) |
+| `L` / `l` | Stop / restart the LED PWM |
+| `1` | LED algorithm uses the OPA, one conversion per frame |
+| `2` | OPA, average of three conversions per frame (boot default) |
+| `3` | GPAMP, one conversion per frame |
+| `4` | GPAMP, average of three conversions per frame |
+| `+` / `-` | AEQ sensitivity up / down by 5 (0..100), reply `SENS` |
+| `F` / `f` | Noise-floor cutoff up / down by 0.01 input-referred counts, reply `FLOOR` in thousandths |
+| `K` / `k` | Input gain up / down by 1 (1..64), reply `GAIN` |
+| `?` | Reports `PATH`, `SENS`, `FLOOR`, `GAIN` and `LEDPK`, the largest LED duty (0..4095) since the previous `?` |
+
+A path command points ADC slots 0, 2 and 3 at the selected amplifier (slot 1
+stays on the raw microphone) and pauses sampling for about 0.2 ms. The N2
+fields and captures labelled "opa" and "gpamp" are slot 0 and slot 2, so both
+show whichever amplifier the path selects. Paths 3 and 4 switch the GPAMP and
+its PA22 output on; return to path 1 or 2 (or reset) before a BSL update. Allow
+about a second after selecting a GPAMP path for its feedback capacitor to
+settle; the LED may flash once at the switch. Settings are not stored.
+The path and sensitivity commands have host tests only so far.
