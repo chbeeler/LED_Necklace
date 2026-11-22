@@ -2,30 +2,33 @@
 """Create QR code files from the CSV written by find_symbol_qr.py.
 
 The CSV is sorted by number of changes, so the first matching rows are the
-best ones. Files go to <out>/svg (28 mm, no quiet zone) and <out>/png (with
-quiet zone, for on-screen scanning), three per code:
+best ones. For every code two single-colour SVG files (28 mm, no quiet zone)
+are written to <out>/svg, because slicers such as Bambu Studio give an SVG
+only one colour:
 
-  *_1_raw     the unmodified QR code
-  *_2_filled  symbol modules black, surround white
-  *_3_gold    like filled, but the symbol modules are gold
+  *_a_black.svg   the QR code without the symbols, surround cleared to white
+  *_b_gold.svg    only the minus and plus symbols
 
-The gold variant is one PNG, but two single-colour SVG files, because slicers
-such as Bambu Studio give an SVG only one colour:
+and three PNG previews (with quiet zone, for on-screen scanning) to <out>/png:
 
-  *_3_gold_a_black.svg   everything except the symbols
-  *_3_gold_b_gold.svg    only the symbols
+  *_1_raw.png     the unmodified QR code
+  *_2_filled.png  symbol modules black, surround white
+  *_3_gold.png    like filled, but the symbol modules are gold
 
 Both have the same 28 mm page. A slicer that centres each SVG on its own
 shapes loses that, so the script prints where the centre of the gold part
-belongs relative to the centre of the black part.
+belongs relative to the centre of the black part. Codes with the same
+--size, --dx and --dy share the same gold part.
 
-File names are qr_<changes>_<id>_v<version><ec>_mask<mask>_s<size>_<n>_<variant>,
-where <ec> is the error correction level, <id> is the URL path with "/" written as "-" (n-123 for /n/123, 123 for
-/123) and "-noscheme" appended when the URL has no https://.
+File names start with qr_<changes>_<id>_v<version><ec>_mask<mask>_s<size>,
+where <ec> is the error correction level and <id> is the URL path with "/"
+written as "-" (n-123 for /n/123, 123 for /123), with "-noscheme" appended
+when the URL has no https://.
 
 Example:
   python make_symbol_qr.py qr_candidates.csv --size 5 --count 10
   python make_symbol_qr.py qr_candidates.csv --size 7 --https no --n-path no --count 5
+  python make_symbol_qr.py qr_candidates.csv --size 7 --dx 13 --dy 4 --count 20   # one fixed position
 """
 import argparse
 import csv
@@ -47,6 +50,11 @@ def main():
     p.add_argument("--version", type=int, help="only this QR version (default: any version in the CSV)")
     p.add_argument("--ec", choices=["L", "M", "Q", "H"],
                    help="only this error correction level (default: any level in the CSV)")
+    p.add_argument("--dx", type=int,
+                   help="only codes with the symbols this many modules left/right of centre (CSV column dx)")
+    p.add_argument("--dy", type=int,
+                   help="only codes with the symbols this many modules below centre (CSV column dy). "
+                        "Use --dx and --dy so that every code fits the same gold part")
     p.add_argument("--size-mm", type=float, default=28.0, help="QR size without quiet zone")
     p.add_argument("-o", "--out", default="qr_out", help="output directory")
     args = p.parse_args()
@@ -60,7 +68,9 @@ def main():
                 and args.https in ("any", r["https"])
                 and args.n_path in ("any", r["n_path"])
                 and args.version in (None, int(r["version"]))
-                and args.ec in (None, r.get("ec", "H")))
+                and args.ec in (None, r.get("ec", "H"))
+                and args.dx in (None, int(r["dx"]))
+                and args.dy in (None, int(r["dy"])))
 
     picked = [r for r in rows if wanted(r)]
     print(f"{len(picked)} of {len(rows)} CSV rows match, creating the best {min(args.count, len(picked))}.")
@@ -83,23 +93,22 @@ def main():
             print(f"  warning: {url} needs {changes} changes, the CSV says {r['changes']}")
         scheme, sep, rest = url.rpartition("://")
         ident = rest.partition("/")[2].replace("/", "-") + ("" if sep else "-noscheme")
+        stem = f"qr_{changes:02d}_{ident}_v{version}{ec}_mask{mask}_s{args.size}"
+
+        blk, gld = variant_layers(matrix, sym, sur, "gold")
+        write_svg(out / "svg" / f"{stem}_a_black.svg", blk, gld & False, args.size_mm)
+        write_svg_modules(out / "svg" / f"{stem}_b_gold.svg", gld, args.size_mm, GOLD)
+
+        # PNG previews, numbered so that raw sorts before filled and gold.
         ok = []
-        # The variants are numbered so that raw sorts before filled and gold.
         for i, variant in enumerate(("raw", "filled", "gold"), 1):
-            blk, gld = variant_layers(matrix, sym, sur, variant)
-            stem = f"qr_{changes:02d}_{ident}_v{version}{ec}_mask{mask}_s{args.size}_{i}_{variant}"
-            if variant == "gold":
-                write_svg(out / "svg" / f"{stem}_a_black.svg", blk, gld & False, args.size_mm)
-                write_svg_modules(out / "svg" / f"{stem}_b_gold.svg", gld, args.size_mm, GOLD)
-            else:
-                write_svg(out / "svg" / f"{stem}.svg", blk, gld, args.size_mm)
-            img = make_png(blk, gld)
-            img.save(out / "png" / f"{stem}.png")
+            img = make_png(*variant_layers(matrix, sym, sur, variant))
+            img.save(out / "png" / f"{stem}_{i}_{variant}.png")
             res = decodes(img, url)
             ok.append("?" if res is None else "yes" if res else "NO")
+        mod = args.size_mm / len(matrix)
         print(f"  {changes:>7}  {version:>7}  {ec:>2} {mask:>4} {dx:>2} {dy:>2}  {black:>2}/{int(sym.sum()):<2}  "
               f"{white:>2}/{int(sur.sum()):<2}  {'/'.join(ok):<23}  {url}")
-        mod = args.size_mm / len(matrix)
         print(f"           gold part: {(2 * dx + args.size) * mod:.2f} x {args.size * mod:.2f} mm, "
               f"centre {dy * mod:.2f} mm below the centre of the black part, not shifted sideways")
     print(f"Files written to {out.resolve()}")
