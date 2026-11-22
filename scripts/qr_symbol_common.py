@@ -126,6 +126,22 @@ def write_svg(path, black, gold, size_mm):
         f'</svg>\n', encoding="utf-8")
 
 
+def write_svg_modules(path, layer, size_mm, color):
+    """Write only the given modules in one colour (no finder patterns).
+
+    Same page size and coordinates as write_svg, so the file lines up with
+    the black one when both keep their position.
+    """
+    n = len(layer)
+    mod = size_mm / n
+    d = [rect_path(c * mod, r * mod, mod, mod) for r in range(n) for c in range(n) if layer[r, c]]
+    path.write_text(
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size_mm}mm" height="{size_mm}mm" '
+        f'viewBox="0 0 {size_mm} {size_mm}">\n'
+        f'  <path d="{" ".join(d)}" fill="{color}"/>\n'
+        f'</svg>\n', encoding="utf-8")
+
+
 def make_png(black, gold, px=20, quiet=4):
     n = len(black)
     size = (n + 2 * quiet) * px

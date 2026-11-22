@@ -9,6 +9,16 @@ quiet zone, for on-screen scanning), three per code:
   *_2_filled  symbol modules black, surround white
   *_3_gold    like filled, but the symbol modules are gold
 
+The gold variant is one PNG, but two single-colour SVG files, because slicers
+such as Bambu Studio give an SVG only one colour:
+
+  *_3_gold_a_black.svg   everything except the symbols
+  *_3_gold_b_gold.svg    only the symbols
+
+Both have the same 28 mm page. A slicer that centres each SVG on its own
+shapes loses that, so the script prints where the centre of the gold part
+belongs relative to the centre of the black part.
+
 File names are qr_<changes>_<id>_v<version><ec>_mask<mask>_s<size>_<n>_<variant>,
 where <ec> is the error correction level, <id> is the URL path with "/" written as "-" (n-123 for /n/123, 123 for
 /123) and "-noscheme" appended when the URL has no https://.
@@ -21,8 +31,8 @@ import argparse
 import csv
 from pathlib import Path
 
-from qr_symbol_common import (count_changes, decodes, make_png, qr_matrices, symbol_masks,
-                              variant_layers, write_svg)
+from qr_symbol_common import (GOLD, count_changes, decodes, make_png, qr_matrices, symbol_masks,
+                              variant_layers, write_svg, write_svg_modules)
 
 
 def main():
@@ -78,13 +88,20 @@ def main():
         for i, variant in enumerate(("raw", "filled", "gold"), 1):
             blk, gld = variant_layers(matrix, sym, sur, variant)
             stem = f"qr_{changes:02d}_{ident}_v{version}{ec}_mask{mask}_s{args.size}_{i}_{variant}"
-            write_svg(out / "svg" / f"{stem}.svg", blk, gld, args.size_mm)
+            if variant == "gold":
+                write_svg(out / "svg" / f"{stem}_a_black.svg", blk, gld & False, args.size_mm)
+                write_svg_modules(out / "svg" / f"{stem}_b_gold.svg", gld, args.size_mm, GOLD)
+            else:
+                write_svg(out / "svg" / f"{stem}.svg", blk, gld, args.size_mm)
             img = make_png(blk, gld)
             img.save(out / "png" / f"{stem}.png")
             res = decodes(img, url)
             ok.append("?" if res is None else "yes" if res else "NO")
         print(f"  {changes:>7}  {version:>7}  {ec:>2} {mask:>4} {dx:>2} {dy:>2}  {black:>2}/{int(sym.sum()):<2}  "
               f"{white:>2}/{int(sur.sum()):<2}  {'/'.join(ok):<23}  {url}")
+        mod = args.size_mm / len(matrix)
+        print(f"           gold part: {(2 * dx + args.size) * mod:.2f} x {args.size * mod:.2f} mm, "
+              f"centre {dy * mod:.2f} mm below the centre of the black part, not shifted sideways")
     print(f"Files written to {out.resolve()}")
 
 
