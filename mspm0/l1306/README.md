@@ -218,6 +218,7 @@ Single characters, no line ending. Settings reply with one `NAME: value` line.
 | `F` / `f` | Noise-floor cutoff up / down by 0.01 input-referred counts, reply `FLOOR` in thousandths |
 | `K` / `k` | Input gain up / down by 1 (1..64), reply `GAIN` |
 | `?` | Reports `PATH`, `SENS`, `FLOOR`, `GAIN` and `LEDPK`, the largest LED duty (0..4095) since the previous `?` |
+| `B` | Replies `BSL`, then resets into the factory ROM bootloader (same as S1 + RESET) |
 
 A path command points ADC slots 0, 2 and 3 at the selected amplifier (slot 1
 stays on the raw microphone) and pauses sampling for about 0.2 ms. The N2
@@ -227,3 +228,8 @@ its PA22 output on; return to path 1 or 2 (or reset) before a BSL update. Allow
 about a second after selecting a GPAMP path for its feedback capacitor to
 settle; the LED may flash once at the switch. Settings are not stored.
 The path and sensitivity commands have host tests only so far.
+
+`B` switches the GPAMP off before the reset. The bootloader then listens on
+PA22 at 9600 baud, while the application receives on PA9, so the PC transmit
+wire still has to reach PA22 for update_bsl.py. If no update follows, reset the
+board to return to the application. Untested on hardware.

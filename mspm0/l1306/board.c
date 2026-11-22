@@ -80,6 +80,14 @@ void boardSelectAmplifier(bool gpamp)
     if (ledPwmEnabled) boardLedPwmEnable(true);
 }
 
+// Resets into the factory ROM bootloader, as S1 + RESET does. Does not return.
+void boardEnterBootloader(void)
+{
+    // PA22 is the bootloader's UART RX; release it before the reset does.
+    boardGpampEnable(false);
+    DL_SYSCTL_resetDevice(DL_SYSCTL_RESET_BOOTLOADER_ENTRY);
+}
+
 bool boardPlusPressed(void)
 {
     // PA18 is the GPAMP summing node; S1/J11 must be disconnected.

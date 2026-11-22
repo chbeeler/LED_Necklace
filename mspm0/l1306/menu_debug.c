@@ -163,11 +163,19 @@ static bool adjustSetting(uint8_t command)
     }
 }
 
+// 'B' enters the ROM bootloader once "BSL" has been sent completely, so the
+// PC sees the confirmation before the UART is reset.
+static bool bslRequested, bslAnnounced;
+
 void menuDebugPoll(void)
 {
     while (!DL_UART_Main_isRXFIFOEmpty(DEBUG_UART_INST)) {
         const uint8_t command=DL_UART_Main_receiveData(DEBUG_UART_INST);
-        if (command == 'M' || command == 'X') {
+        if (command == 'B') {
+            cancelCapture();
+            measuring = false;
+            bslRequested = true;
+        } else if (command == 'M' || command == 'X') {
             cancelCapture();
             measuring = command == 'M';
             boardGpampEnable(measuring || pathUsesGpamp());
@@ -195,6 +203,11 @@ void menuDebugPoll(void)
             }
         }
     }
+    // A capture reply already on the wire is finished first.
+    if (bslRequested && !bslAnnounced && !captureSamples) {
+        sendLine("BSL\r\n", 5);
+        bslAnnounced = true;
+    }
     while (tail != head && !DL_UART_Main_isTXFIFOFull(DEBUG_UART_INST)) {
         DL_UART_Main_transmitData(DEBUG_UART_INST, queue[tail]);
         tail = (tail + 1) & 255;
@@ -204,6 +217,8 @@ void menuDebugPoll(void)
         captureTxOffset = 0;
     }
     if (captureSamples) transmitCapture();
+    if (bslAnnounced && tail == head && !DL_UART_Main_isBusy(DEBUG_UART_INST))
+        boardEnterBootloader();
 }
 
 // Integer-only CSV formatting avoids printf and large floating-point libraries.

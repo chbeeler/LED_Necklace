@@ -8,7 +8,9 @@ bool DL_UART_Main_isRXFIFOEmpty(int u){(void)u;return rx<0;}
 uint8_t DL_UART_Main_receiveData(int u){(void)u;int c=rx;rx=-1;return c;}
 bool DL_UART_Main_isTXFIFOFull(int u){(void)u;return false;}
 void DL_UART_Main_transmitData(int u,char c){(void)u;output[used++]=c;output[used]=0;}
-bool DL_UART_Main_isBusy(int u){(void)u;return false;}
+static bool txBusy, inBootloader;
+bool DL_UART_Main_isBusy(int u){(void)u;return txBusy;}
+void boardEnterBootloader(void){inBootloader=true;}
 void audioCaptureStart(AudioCaptureMode mode){(void)mode;}
 void audioCaptureCancel(void){}
 const uint16_t *audioCaptureResult(void){return NULL;}
@@ -64,4 +66,11 @@ int main(void){
  assert(replied("PATH: 2\r\nSENS: 50\r\nFLOOR: 0\r\nGAIN: 11\r\nLEDPK: 1234\r\n"));
  assert(ledDutyPeak==0);
  puts("PASS: path select and sensitivity commands");
+
+ // 'B' confirms, then enters the bootloader only after the reply has left.
+ txBusy=true;send('B');
+ assert(replied("BSL\r\n")&&!inBootloader);
+ menuDebugPoll();assert(!inBootloader);
+ txBusy=false;menuDebugPoll();assert(inBootloader);
+ puts("PASS: bootloader entry after the confirmation is sent");
 }
