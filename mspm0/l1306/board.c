@@ -49,35 +49,103 @@ void boardLedPwmEnable(bool enable)
     __set_PRIMASK(mask);
 }
 
-// Points ADC slots 0, 2 and 3 at the OPA (channel 12) or the GPAMP (channel
-// 14); slot 1 stays on the unamplified microphone. Sampling pauses for about
-// 0.2 ms so the change happens between two frames and the FIFO word order the
-// DMA relies on is kept. The caller enables the GPAMP itself.
-void boardSelectAmplifier(bool gpamp)
+// Sampling is paused between two frames, so the FIFO word order the DMA
+// relies on is kept and no block is lost; only time is skipped.
+static void pauseSampling(void)
 {
-    const uint32_t channel = gpamp ? DL_ADC12_INPUT_CHAN_14
-                                   : DL_ADC12_INPUT_CHAN_12;
-    static const DL_ADC12_MEM_IDX slots[] = {
-        DL_ADC12_MEM_IDX_0, DL_ADC12_MEM_IDX_2, DL_ADC12_MEM_IDX_3};
     DL_TimerG_stopCounter(AUDIO_TIMER_INST);
-    delay_cycles(CPUCLK_FREQ / 5000); // Let the frame in progress finish.
-    DL_ADC12_disableConversions(AUDIO_ADC_INST);
-    for (unsigned i = 0; i < 3; ++i) {
-        // Same settings as SysConfig generates for these slots, except the
-        // channel: the last slot of a frame waits for the next timer event.
-        DL_ADC12_configConversionMem(AUDIO_ADC_INST, slots[i], channel,
-            DL_ADC12_REFERENCE_VOLTAGE_INTREF,
-            DL_ADC12_SAMPLE_TIMER_SOURCE_SCOMP0,
-            DL_ADC12_AVERAGING_MODE_DISABLED,
-            DL_ADC12_BURN_OUT_SOURCE_DISABLED,
-            slots[i] == DL_ADC12_MEM_IDX_3 ? DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT
-                                           : DL_ADC12_TRIGGER_MODE_AUTO_NEXT,
-            DL_ADC12_WINDOWS_COMP_MODE_DISABLED);
-    }
-    DL_ADC12_enableConversions(AUDIO_ADC_INST);
+    delay_cycles(CPUCLK_FREQ / 5000); // 0.2 ms: let the frame in progress finish.
+}
+
+static void resumeSampling(void)
+{
     DL_TimerG_startCounter(AUDIO_TIMER_INST);
     // The pause moved the frame timing; put the LED edges back in the gap.
     if (ledPwmEnabled) boardLedPwmEnable(true);
+}
+
+enum { OPA_CHANNEL = DL_ADC12_INPUT_CHAN_12, RAW_CHANNEL = DL_ADC12_INPUT_CHAN_9,
+       GPAMP_CHANNEL = DL_ADC12_INPUT_CHAN_14 };
+
+static void setAdcChannels(uint32_t slot0, uint32_t slot1, uint32_t slot2,
+                           uint32_t slot3)
+{
+    const uint32_t channels[4] = {slot0, slot1, slot2, slot3};
+    static const DL_ADC12_MEM_IDX slots[4] = {
+        DL_ADC12_MEM_IDX_0, DL_ADC12_MEM_IDX_1, DL_ADC12_MEM_IDX_2,
+        DL_ADC12_MEM_IDX_3};
+    pauseSampling();
+    DL_ADC12_disableConversions(AUDIO_ADC_INST);
+    for (unsigned i = 0; i < 4; ++i) {
+        // Same settings as SysConfig generates, except the channel. The
+        // unamplified microphone gets the longer sample time, and the last
+        // slot of a frame waits for the next timer event.
+        DL_ADC12_configConversionMem(AUDIO_ADC_INST, slots[i], channels[i],
+            DL_ADC12_REFERENCE_VOLTAGE_INTREF,
+            channels[i] == RAW_CHANNEL ? DL_ADC12_SAMPLE_TIMER_SOURCE_SCOMP1
+                                       : DL_ADC12_SAMPLE_TIMER_SOURCE_SCOMP0,
+            DL_ADC12_AVERAGING_MODE_DISABLED,
+            DL_ADC12_BURN_OUT_SOURCE_DISABLED,
+            i == 3 ? DL_ADC12_TRIGGER_MODE_TRIGGER_NEXT
+                   : DL_ADC12_TRIGGER_MODE_AUTO_NEXT,
+            DL_ADC12_WINDOWS_COMP_MODE_DISABLED);
+    }
+    DL_ADC12_enableConversions(AUDIO_ADC_INST);
+    resumeSampling();
+}
+
+// Points ADC slots 0, 2 and 3 at the OPA (channel 12) or the GPAMP (channel
+// 14); slot 1 stays on the unamplified microphone. The caller enables the
+// GPAMP itself.
+void boardSelectAmplifier(bool gpamp)
+{
+    const uint32_t channel = gpamp ? GPAMP_CHANNEL : OPA_CHANNEL;
+    setAdcChannels(channel, RAW_CHANNEL, channel, channel);
+}
+
+// Self-test layout: OPA, OPA, GPAMP, GPAMP, so both amplifiers are converted
+// in every frame. The caller enables the GPAMP itself.
+void boardSelectTestLayout(void)
+{
+    setAdcChannels(OPA_CHANNEL, OPA_CHANNEL, GPAMP_CHANNEL, GPAMP_CHANNEL);
+}
+
+// One record in the last flash sector, far above the application image.
+// update_bsl.py erases it together with the rest of MAIN flash.
+enum { RECORD_ADDRESS = 0xFC00 };
+
+const uint32_t *boardStoredRecord(void)
+{
+    return (const uint32_t *)RECORD_ADDRESS;
+}
+
+// Replaces the stored record; wordCount must be even and at most 256.
+// Sampling pauses for the few milliseconds the erase takes.
+bool boardStoreRecord(const uint32_t *words, unsigned wordCount)
+{
+    bool ok = true;
+    pauseSampling();
+    const uint32_t mask = __get_PRIMASK();
+    __disable_irq();
+    // Protection is re-applied after every flash command.
+    DL_FlashCTL_executeClearStatus(FLASHCTL);
+    DL_FlashCTL_unprotectSector(FLASHCTL, RECORD_ADDRESS,
+                                DL_FLASHCTL_REGION_SELECT_MAIN);
+    if (DL_FlashCTL_eraseMemoryFromRAM(FLASHCTL, RECORD_ADDRESS,
+            DL_FLASHCTL_COMMAND_SIZE_SECTOR) == DL_FLASHCTL_COMMAND_STATUS_FAILED)
+        ok = false;
+    // Flash words are 64 bits: program two 32-bit words per command.
+    for (unsigned i = 0; ok && i < wordCount; i += 2) {
+        DL_FlashCTL_executeClearStatus(FLASHCTL);
+        DL_FlashCTL_unprotectSector(FLASHCTL, RECORD_ADDRESS,
+                                    DL_FLASHCTL_REGION_SELECT_MAIN);
+        if (DL_FlashCTL_programMemoryFromRAM64(FLASHCTL, RECORD_ADDRESS + 4 * i,
+                (uint32_t *)&words[i]) == DL_FLASHCTL_COMMAND_STATUS_FAILED)
+            ok = false;
+    }
+    __set_PRIMASK(mask);
+    resumeSampling();
+    return ok;
 }
 
 bool boardPlusPressed(void)

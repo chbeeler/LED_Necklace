@@ -89,4 +89,13 @@ int main(void){
  assert(w.amp.minimum == 4396 / 3 && w.amp.maximum == 4404 / 3);
  assert(w.opa.mean == 100 && w.gpamp.mean == 300);
  puts("PASS: single and three-conversion amplifier level");
+
+ // Self-test levels: slot 0, slot 1, their average, slot 2, slot 3, average.
+ audioSetTestMode(true);
+ for (unsigned block = 0; block < 8; ++block)
+  assert(pollNextBlock(&w) == (block == 7));
+ // Per frame: 100+s, 200+2s, 300+3s and a constant 4000, with s = +/-1.
+ assert(w.testRms[0] == 1 && w.testRms[1] == 2 && w.testRms[2] == 1.5f);
+ assert(w.testRms[3] == 3 && w.testRms[4] == 0 && w.testRms[5] == 1.5f);
+ puts("PASS: self-test levels per slot and per pair");
 }

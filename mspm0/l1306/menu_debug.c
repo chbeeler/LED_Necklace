@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "audio.h"
 #include "board.h"
+#include "selftest.h"
 #include <math.h>
 
 // Main-loop producer and consumer only. Drop an entire line if the queue fills;
@@ -103,12 +104,13 @@ void reportAeqMenu(const char *label, uint16_t value)
 // and in paths 1 and 2 both show the OPA.
 static uint8_t path = 2;
 static bool pathUsesGpamp(void) { return path >= 3; }
+static bool gpampNeeded(void);
 
 static void selectPath(uint8_t next)
 {
     path = next;
     // The GPAMP stays off at boot (path 2) so PA22 is free for a BSL update.
-    boardGpampEnable(measuring || pathUsesGpamp());
+    boardGpampEnable(gpampNeeded());
     boardSelectAmplifier(pathUsesGpamp());
     audioSetAveraging(path == 2 || path == 4);
     if (measuring) settlingWindows = 64;
@@ -163,6 +165,30 @@ static bool adjustSetting(uint8_t command)
     }
 }
 
+static bool gpampNeeded(void)
+{
+    return measuring || pathUsesGpamp() || selftestActive();
+}
+
+// Self-test: T starts it, t stops and stores it, P prints the running or
+// stored result as T0 (header), six T1 lines (one per path) and T9 (end).
+static unsigned printStep;
+static void printSelftestLine(void);
+
+static void selftestCommand(uint8_t command)
+{
+    if (command == 'P') {
+        printStep = 1;
+    } else if (command == 'T' && !selftestActive()) {
+        selftestStart();
+        reportAeqMenu("TEST", 1);
+    } else if (command == 't' && selftestActive()) {
+        selftestStop();
+        selectPath(path); // Back to the normal ADC layout.
+        reportAeqMenu("TEST", 0);
+    }
+}
+
 void menuDebugPoll(void)
 {
     while (!DL_UART_Main_isRXFIFOEmpty(DEBUG_UART_INST)) {
@@ -170,7 +196,7 @@ void menuDebugPoll(void)
         if (command == 'M' || command == 'X') {
             cancelCapture();
             measuring = command == 'M';
-            boardGpampEnable(measuring || pathUsesGpamp());
+            boardGpampEnable(gpampNeeded());
             if (measuring) {
                 settlingWindows = 64;
                 sequence = 0;
@@ -180,6 +206,10 @@ void menuDebugPoll(void)
             boardLedPwmEnable(command == 'l');
         } else if (captureCommand) {
             // Settings and path changes wait until the capture has been sent.
+        } else if (command == 'T' || command == 't' || command == 'P') {
+            selftestCommand(command);
+        } else if (selftestActive()) {
+            // The test owns the ADC layout and the settings do not affect it.
         } else if (command >= '1' && command <= '4') {
             selectPath(command - '0');
         } else if (adjustSetting(command)) {
@@ -204,6 +234,8 @@ void menuDebugPoll(void)
         captureTxOffset = 0;
     }
     if (captureSamples) transmitCapture();
+    // One line at a time: each must fit the queue completely.
+    if (printStep && tail == head && !captureCommand) printSelftestLine();
 }
 
 // Integer-only CSV formatting avoids printf and large floating-point libraries.
@@ -216,6 +248,34 @@ static unsigned appendNumber(unsigned n, uint32_t value)
     measurementLine[n++]=',';
     while(count) measurementLine[n++]=digits[--count];
     return n;
+}
+
+// T0,<counted intervals>,<1 while running>
+// T1,<path>,<mean RMS in 1/1000 count>,<intervals with a flash per gain step>
+// T9
+static void printSelftestLine(void)
+{
+    const SelftestRecord *result = selftestResults();
+    const unsigned step = printStep++;
+    unsigned n = 0;
+    measurementLine[n++] = 'T';
+    if (step == 1) {
+        measurementLine[n++] = '0';
+        n = appendNumber(n, result ? result->intervals : 0);
+        n = appendNumber(n, selftestActive());
+    } else if (result && step <= 1 + SELFTEST_PATHS) {
+        const unsigned p = step - 2;
+        measurementLine[n++] = '1';
+        n = appendNumber(n, p);
+        n = appendNumber(n, result->meanRmsMilli[p]);
+        for (unsigned bin = 0; bin < SELFTEST_BINS; ++bin)
+            n = appendNumber(n, result->flashIntervals[p][bin]);
+    } else {
+        measurementLine[n++] = '9';
+        printStep = 0;
+    }
+    measurementLine[n++] = '\r'; measurementLine[n++] = '\n';
+    sendLine(measurementLine, n);
 }
 
 void menuDebugMeasure(const AudioWindow *w)

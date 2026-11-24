@@ -227,3 +227,50 @@ its PA22 output on; return to path 1 or 2 (or reset) before a BSL update. Allow
 about a second after selecting a GPAMP path for its feedback capacitor to
 settle; the LED may flash once at the switch. Settings are not stored.
 The path and sensitivity commands have host tests only so far.
+
+## False-flash self-test (no PC needed)
+
+Compares the amplifier paths on the same sound, so ambient noise and UART
+traffic cannot favour one of them. During the test the ADC converts OPA, OPA,
+GPAMP, GPAMP in every frame (the unamplified channel is not sampled) and six
+paths are evaluated at once:
+
+| Path | Signal |
+|---|---|
+| 0 | OPA, first conversion (ADC slot 0) |
+| 1 | OPA, second conversion (slot 1) |
+| 2 | OPA, average of both |
+| 3 | GPAMP, first conversion (slot 2) |
+| 4 | GPAMP, second conversion (slot 3) |
+| 5 | GPAMP, average of both |
+
+The AEQ level tracking is linear in its input, so one tracker per path at gain
+1 gives the answer for every gain: for each 1.024 s interval the firmware finds
+the lowest `GAIN` at which the algorithm would have flashed (at `SENS` 100,
+`FLOOR` 0, the default 60 ms afterglow) and counts intervals for 24 gain steps
+from 2 to 108, four per octave. tests/selftest_test.cpp checks this against the
+real algorithm.
+
+Start: hold S2 while powering up or resetting, or send `T`. The LED is bright
+for two seconds, then steady and dim. Counting starts 30 seconds later. The
+counts are written to the last flash sector (0xFC00) about every two minutes
+and on `t`, so power can simply be removed; at most two minutes are lost. A
+new start discards the previous result. A BSL update erases it.
+
+| Command | Effect |
+|---|---|
+| `T` | Start the self-test, reply `TEST: 1` |
+| `t` | Stop, store, return to the selected path, reply `TEST: 0` |
+| `P` | Print the running or stored result |
+
+`P` prints `T0,<intervals>,<1 while running>`, then per path
+`T1,<path>,<mean window RMS in 1/1000 count>,<24 counts>`, then `T9`. Each count
+is the number of intervals with a flash at that gain step. Path and setting
+commands are ignored while the test runs. Power the board from a power bank or
+batteries for the test; a wall adapter adds noise.
+
+    gcc -std=c11 -Il1306 -c l1306/selftest.c -o SELFTEST_OBJ
+    g++ -std=c++17 -I../include -Il1306 l1306/tests/selftest_test.cpp SELFTEST_OBJ ../src/adaptive_brightness.cpp -o SELFTEST_EXE
+
+The flash writes, the run-time ADC layout and the CPU load of the test have
+host tests only and are unverified on hardware.

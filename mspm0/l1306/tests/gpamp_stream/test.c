@@ -3,7 +3,7 @@
 #include <string.h>
 #include "audio.h"
 volatile uint32_t micMissedBlocks, micAdcOverruns, micTriggerOverruns;
-static int rx=-1; static char output[1024]; static unsigned used;
+static int rx=-1; static char output[8192]; static unsigned used;
 bool DL_UART_Main_isRXFIFOEmpty(int u){(void)u;return rx<0;}
 uint8_t DL_UART_Main_receiveData(int u){(void)u;int c=rx;rx=-1;return c;}
 bool DL_UART_Main_isTXFIFOFull(int u){(void)u;return false;}
@@ -21,6 +21,12 @@ void audioSetAveraging(bool on){averaging=on;}
 uint8_t aeqAdjustSensitivity(int steps){sensitivity+=5*steps;return sensitivity;}
 volatile float micNoiseFloor=0.25f, micInputGain=12.0f;
 volatile uint16_t ledDutyPeak;
+#include "selftest.h"
+static bool testing; static SelftestRecord fake; static const SelftestRecord *results;
+void selftestStart(void){testing=true;}
+void selftestStop(void){testing=false;}
+bool selftestActive(void){return testing;}
+const SelftestRecord *selftestResults(void){return results;}
 static void send(char c){void menuDebugPoll(void);rx=c;menuDebugPoll();}
 static bool replied(const char *expected){
  const unsigned n=strlen(expected);
@@ -64,4 +70,23 @@ int main(void){
  assert(replied("PATH: 2\r\nSENS: 50\r\nFLOOR: 0\r\nGAIN: 11\r\nLEDPK: 1234\r\n"));
  assert(ledDutyPeak==0);
  puts("PASS: path select and sensitivity commands");
+
+ // Self-test commands. Printing sends one line per poll once the queue is empty.
+ send('P');for(int i=0;i<4;i++)menuDebugPoll();
+ assert(replied("T0,0,0\r\nT9\r\n")); // Nothing stored.
+ send('T');assert(testing&&replied("TEST: 1\r\n"));
+ send('X');assert(enabled); // The test needs the GPAMP.
+ unsigned before=used;send('3');send('+');assert(used==before&&adcGpamp==0);
+ fake.intervals=300;
+ for(int p=0;p<SELFTEST_PATHS;p++){
+  fake.meanRmsMilli[p]=1000+p;
+  for(int b=0;b<SELFTEST_BINS;b++)fake.flashIntervals[p][b]=p*100+b;
+ }
+ results=&fake;before=used;
+ send('P');for(int i=0;i<10;i++)menuDebugPoll();
+ assert(!strncmp(output+before,"T0,300,1\r\nT1,0,1000,0,1,2,3,",28));
+ assert(strstr(output+before,"\r\nT1,5,1005,500,501,"));
+ assert(strstr(output+before,",522,523\r\nT9\r\n")&&replied("T9\r\n"));
+ send('t');assert(!testing&&replied("PATH: 2\r\nTEST: 0\r\n")&&!enabled);
+ puts("PASS: self-test start, stop and result printing");
 }

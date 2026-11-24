@@ -31,16 +31,26 @@ static Accumulator raw = {.minimum = ADC_MAX};
 static Accumulator gpamp = {.minimum = ADC_MAX};
 static Accumulator amp = {.minimum = AMP_MAX};
 static bool ampAverage = true;
+static Accumulator test[AUDIO_TEST_LEVELS];
+static bool testMode;
 static uint16_t accumulatedPairs;
 static uint32_t lastBlock;
 
 static void resetAccumulators(void)
 {
+    for (unsigned i = 0; i < AUDIO_TEST_LEVELS; ++i)
+        test[i] = (Accumulator){.minimum = AMP_MAX};
     opa = (Accumulator){.minimum = ADC_MAX};
     raw = (Accumulator){.minimum = ADC_MAX};
     gpamp = (Accumulator){.minimum = ADC_MAX};
     amp = (Accumulator){.minimum = AMP_MAX};
     accumulatedPairs = 0;
+}
+
+void audioSetTestMode(bool enable)
+{
+    testMode = enable;
+    resetAccumulators();
 }
 
 void audioSetAveraging(bool averageThree)
@@ -171,6 +181,15 @@ bool audioPollWindow(AudioWindow *window)
         accumulate(&raw, (uint16_t)((snapshot[i] >> 16) & ADC_MAX));
         accumulate(&gpamp, slot2);
         accumulate(&amp, ampAverage ? slot0 + slot2 + slot3 : slot0);
+        if (testMode) {
+            const uint16_t slot1 = (snapshot[i] >> 16) & ADC_MAX;
+            accumulate(&test[0], slot0);
+            accumulate(&test[1], slot1);
+            accumulate(&test[2], slot0 + slot1);
+            accumulate(&test[3], slot2);
+            accumulate(&test[4], slot3);
+            accumulate(&test[5], slot2 + slot3);
+        }
     }
     accumulatedPairs += BLOCK_FRAMES;
     if (sequence % WINDOW_BLOCKS) return false;
@@ -181,6 +200,8 @@ bool audioPollWindow(AudioWindow *window)
         window->raw = finish(&raw, 1);
         window->gpamp = finish(&gpamp, 1);
         window->amp = finish(&amp, ampAverage ? 3 : 1);
+        for (unsigned i = 0; testMode && i < AUDIO_TEST_LEVELS; ++i)
+            window->testRms[i] = finish(&test[i], i % 3 == 2 ? 2 : 1).rms;
         window->timeMs = sequence * (BLOCK_FRAMES * 1000 / AUDIO_SAMPLE_RATE);
         ++micWindows;
     }

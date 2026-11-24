@@ -1,6 +1,7 @@
 #include "board.h"
 #include "audio.h"
 #include "audio_range.h"
+#include "selftest.h"
 #include "ti_msp_dl_config.h"
 
 void menuDebugPoll(void);
@@ -41,6 +42,8 @@ int main(void)
     micInputGain = 12.0f;
     audioStart();
     boardLedPwmEnable(true);
+    // Hold S2 while powering up to run the false-flash self-test without a PC.
+    if (boardMinusPressed()) selftestStart();
     for (;;) {
         menuDebugPoll();
         AudioWindow window;
@@ -49,6 +52,11 @@ int main(void)
             continue;
         }
         menuDebugMeasure(&window);
+        if (selftestActive()) {
+            selftestWindow(window.testRms);
+            boardSetLed(selftestLedDuty());
+            continue;
+        }
         micOpa = window.opa;
         micRaw = window.raw;
         micGpamp = window.gpamp;
